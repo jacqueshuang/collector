@@ -101,6 +101,13 @@ public class YcConfig {
 
 ### 单发短信
 
+两种业务场景（同一 `getSmsCodeNewV2`，`pathType` 不同）：
+
+| 方法 | 场景 | pathType | 是否 check 手机号 |
+|------|------|----------|-------------------|
+| `sendSms(mobile)` | 重置手机号（`isShow=resetPhone`） | **11** | 是 |
+| `sendLoginSms(mobile)` | 登录页验证码（`isShow=login`） | **5** | 否 |
+
 ```java
 @RestController
 @RequestMapping("/api/sms")
@@ -112,9 +119,10 @@ public class SmsController {
         this.ycClient = ycClient;
     }
 
+    /** 重置手机号短信：check → captcha → pathType=11 */
     @PostMapping("/send")
     public Map<String, Object> send(@RequestBody Map<String, String> body) {
-        // check → captcha → getSmsCode；单次约 40–60s，注意网关超时
+        // 单次约 40–60s，注意网关超时
         var r = ycClient.sendSms(body.get("mobile"));
         return Map.of(
                 "code", r.getCode(),
@@ -122,7 +130,25 @@ public class SmsController {
                 "data", r.getData() == null ? "" : r.getData()
         );
     }
+
+    /** 登录页短信：captcha → pathType=5（无 checkMemberMobileAvailable） */
+    @PostMapping("/send-login")
+    public Map<String, Object> sendLogin(@RequestBody Map<String, String> body) {
+        var r = ycClient.sendLoginSms(body.get("mobile"));
+        return Map.of(
+                "code", r.getCode(),
+                "msg", r.getMsg() == null ? "" : r.getMsg(),
+                "data", r.getData() == null ? "" : r.getData()
+        );
+    }
 }
+```
+
+底层也可显式指定类型：
+
+```java
+// SmsPathType.RESET_PHONE(11) / SmsPathType.LOGIN(5)
+client.getSmsCode(mobile, captchaVerifyParam, SmsPathType.LOGIN);
 ```
 
 其他单接口：`checkMobileAvailable` · `getCaptchaVerifyParam` · `getSmsCode` · `replaceMobile`。
@@ -142,8 +168,19 @@ public class SmsBatchController {
 
     @PostMapping("/batch")
     public Map<String, Object> batch(@RequestBody List<String> mobiles) {
-        // 超过 maxBatchSize → YcException，不会进入滑块/HTTP
+        // 重置手机号批量（pathType=11）；超过 maxBatchSize → YcException
         var report = batchExecutor.sendSms(mobiles);
+        return toBatchBody(report);
+    }
+
+    @PostMapping("/batch-login")
+    public Map<String, Object> batchLogin(@RequestBody List<String> mobiles) {
+        // 登录页短信批量（pathType=5）
+        var report = batchExecutor.sendLoginSms(mobiles);
+        return toBatchBody(report);
+    }
+
+    private static Map<String, Object> toBatchBody(SmsBatchReport report) {
         return Map.of(
                 "total", report.total(),
                 "success", report.successCount(),
@@ -210,7 +247,7 @@ try (YcClient client = YcClient.builder()
 }
 ```
 
-Public API: `checkMobileAvailable` · `getCaptchaVerifyParam` · `getSmsCode` · `sendSms` · `replaceMobile` · 批量 `YcSmsBatchExecutor#sendSms`.
+Public API: `checkMobileAvailable` · `getCaptchaVerifyParam` · `getSmsCode` · `sendSms`（重置 pathType=11） · `sendLoginSms`（登录 pathType=5） · `replaceMobile` · 批量 `YcSmsBatchExecutor#sendSms` / `#sendLoginSms`.
 
 ## Config (`YcClientConfig`)
 
@@ -364,6 +401,9 @@ java --enable-native-access=ALL-UNNAMED -jar app.jar
 |----------|---------|---------|
 | `YC_RECON_DIR` | runtime + tests | absolute path to recon scripts (`feilin094.js` present) |
 | `YC_LIVE_CAPTCHA=1` | tests only | enables live Init/Verify / network captcha tests |
+| `YC_LIVE_SMS=1` | tests only | live reset-phone `sendSms` (pathType=11); needs `YC_TEST_MOBILE` |
+| `YC_LIVE_LOGIN_SMS=1` | tests only | live login `sendLoginSms` (pathType=5); needs `YC_TEST_MOBILE` |
+| `YC_TEST_MOBILE` | tests only | mobile for live SMS ITs |
 | `ALIYUN_CAPTCHA_KEY_ID` | **not used** | early plan only; not read by current SDK |
 | `ALIYUN_CAPTCHA_KEY_SECRET` | **not used** | early plan only; not read by current SDK |
 

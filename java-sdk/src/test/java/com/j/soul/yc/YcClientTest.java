@@ -102,6 +102,43 @@ class YcClientTest {
     }
 
     @Test
+    void sendLoginSms_skipsCheckAndUsesLoginFlow() {
+        AtomicInteger captchaCalls = new AtomicInteger();
+        CaptchaProvider captcha = () -> {
+            captchaCalls.incrementAndGet();
+            return new CaptchaResult("cvp-login", "1pn9314j", "cid-l", "sec-l");
+        };
+
+        RecordingTransport transport = new RecordingTransport(req -> {
+            if (req.url().contains("getSmsCodeNewV2")) {
+                return json(200, "{\"code\":200,\"message\":\"验证码已发送\",\"data\":null}");
+            }
+            return json(404, "{\"code\":404,\"msg\":\"unexpected\",\"data\":null}");
+        });
+
+        try (YcClient client = YcClient.builder()
+                .config(YcClientConfig.builder().baseUrl("https://example.test/api").build())
+                .transport(transport)
+                .captchaProvider(captcha)
+                .build()) {
+            ApiResult r = client.sendLoginSms("13900002222");
+            assertEquals(200, r.getCode());
+            assertEquals("验证码已发送", r.getMsg());
+        }
+
+        assertEquals(1, captchaCalls.get());
+        assertEquals(1, transport.requests.size(), "login SMS must not call checkMemberMobileAvailable");
+        HttpRequest sms = transport.requests.getFirst();
+        assertEquals("POST", sms.method());
+        assertTrue(sms.url().endsWith("/mobile/login/getSmsCodeNewV2"));
+        assertTrue(sms.headers().get("Referer").contains("isShow=login"));
+        assertHasBusinessHeaders(sms.headers());
+        String body = new String(sms.body(), StandardCharsets.UTF_8);
+        assertTrue(body.contains("key="));
+        assertTrue(body.contains("data="));
+    }
+
+    @Test
     void replaceMobile_sendsEncryptedForm() {
         RecordingTransport transport = new RecordingTransport(req ->
                 json(200, "{\"code\":200,\"msg\":\"replaced\",\"data\":null}"));

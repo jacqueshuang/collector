@@ -57,12 +57,25 @@ public final class YcSmsBatchExecutor implements AutoCloseable {
     }
 
     /**
-     * Send SMS for all mobiles in parallel (bounded by worker pool + captcha slots).
+     * Reset-phone SMS batch ({@code pathType=11}, with check-mobile).
      * Order of {@link SmsBatchReport#results()} matches input order.
      *
      * @throws YcException if non-blank mobile count &gt; {@link #maxBatchSize()}
      */
     public SmsBatchReport sendSms(Collection<String> mobiles) {
+        return sendAll(mobiles, false);
+    }
+
+    /**
+     * Login-page SMS batch ({@code pathType=5}, no check-mobile).
+     *
+     * @throws YcException if non-blank mobile count &gt; {@link #maxBatchSize()}
+     */
+    public SmsBatchReport sendLoginSms(Collection<String> mobiles) {
+        return sendAll(mobiles, true);
+    }
+
+    private SmsBatchReport sendAll(Collection<String> mobiles, boolean login) {
         Objects.requireNonNull(mobiles, "mobiles");
         long t0 = System.nanoTime();
         List<String> list = new ArrayList<>(mobiles.size());
@@ -82,7 +95,7 @@ public final class YcSmsBatchExecutor implements AutoCloseable {
 
         List<Callable<SmsTaskResult>> tasks = new ArrayList<>(list.size());
         for (String mobile : list) {
-            tasks.add(() -> runOne(mobile));
+            tasks.add(() -> runOne(mobile, login));
         }
 
         List<SmsTaskResult> results = new ArrayList<>(list.size());
@@ -112,10 +125,10 @@ public final class YcSmsBatchExecutor implements AutoCloseable {
         return new SmsBatchReport(results, elapsed);
     }
 
-    private SmsTaskResult runOne(String mobile) {
+    private SmsTaskResult runOne(String mobile, boolean login) {
         long t0 = System.nanoTime();
         try {
-            ApiResult r = client.sendSms(mobile);
+            ApiResult r = login ? client.sendLoginSms(mobile) : client.sendSms(mobile);
             long ms = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
             return SmsTaskResult.ok(mobile, r, ms);
         } catch (Exception e) {

@@ -65,7 +65,29 @@ class LiveSendSmsIT {
             ApiResult r = client.sendSms(mobile.trim());
             assertNotNull(r, "ApiResult must parse");
             assertNotNull(r.getCode(), "business code present");
-            System.out.println("live sendSms mobile=" + mobile.trim()
+            System.out.println("live sendSms(reset) mobile=" + mobile.trim()
+                    + " code=" + r.getCode()
+                    + " msg=" + r.getMsg()
+                    + " data=" + r.getData());
+        }
+    }
+
+    /**
+     * Login-page SMS ({@code pathType=5}). Enable with {@code YC_LIVE_LOGIN_SMS=1}.
+     */
+    @Test
+    @EnabledIfEnvironmentVariable(named = "YC_LIVE_LOGIN_SMS", matches = "1")
+    void live_sendLoginSms() {
+        String mobile = System.getenv("YC_TEST_MOBILE");
+        assumeTrue(mobile != null && !mobile.isBlank(),
+                "set YC_TEST_MOBILE to run live sendLoginSms");
+        Path recon = requireRecon();
+        YcClientConfig cfg = YcClientConfig.builder().reconDir(recon.toString()).build();
+        try (YcClient client = YcClient.builder().config(cfg).build()) {
+            ApiResult r = client.sendLoginSms(mobile.trim());
+            assertNotNull(r, "ApiResult must parse");
+            assertNotNull(r.getCode(), "business code present");
+            System.out.println("live sendLoginSms mobile=" + mobile.trim()
                     + " code=" + r.getCode()
                     + " msg=" + r.getMsg()
                     + " data=" + r.getData());

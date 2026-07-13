@@ -12,6 +12,7 @@ import com.j.soul.yc.http.HttpResponse;
 import com.j.soul.yc.http.HttpTransport;
 import com.j.soul.yc.model.ApiResult;
 import com.j.soul.yc.model.ReplaceMobileRequest;
+import com.j.soul.yc.model.SmsPathType;
 import com.j.soul.yc.sign.GwSigner;
 
 import java.net.URLEncoder;
@@ -29,6 +30,9 @@ public final class YcClient implements AutoCloseable {
     private static final String PATH_CHECK_MOBILE = "/mobile/loginregister/checkMemberMobileAvailable";
     private static final String PATH_GET_SMS = "/mobile/login/getSmsCodeNewV2";
     private static final String PATH_REPLACE_MOBILE = "/mobile/openApi/replaceMobile";
+    /** Referer used by login-page SMS (isShow=login). */
+    private static final String LOGIN_REFERER =
+            "https://uc.perfect99.com/loginAndRegistration?isShow=login";
 
     private final YcClientConfig config;
     private final HttpTransport transport;
@@ -81,21 +85,35 @@ public final class YcClient implements AutoCloseable {
         }
     }
 
+    /**
+     * Request SMS with reset-phone pathType (11). Prefer {@link #getSmsCode(String, String, SmsPathType)}.
+     */
     public ApiResult getSmsCode(String mobile, String captchaVerifyParam) {
+        return getSmsCode(mobile, captchaVerifyParam, SmsPathType.RESET_PHONE);
+    }
+
+    /**
+     * POST {@code /mobile/login/getSmsCodeNewV2} with crytoLogin body.
+     *
+     * @param pathType {@link SmsPathType#RESET_PHONE} (11) or {@link SmsPathType#LOGIN} (5)
+     */
+    public ApiResult getSmsCode(String mobile, String captchaVerifyParam, SmsPathType pathType) {
         ensureOpen();
         Objects.requireNonNull(mobile, "mobile");
         Objects.requireNonNull(captchaVerifyParam, "captchaVerifyParam");
+        Objects.requireNonNull(pathType, "pathType");
         try {
             Map<String, Object> payload = new LinkedHashMap<>(4);
             payload.put("mobile", mobile);
-            payload.put("pathType", 11);
+            payload.put("pathType", pathType.value());
             payload.put("captchaVerifyParam", captchaVerifyParam);
             payload.put("sceneId", config.sceneId());
 
             Map<String, String> encrypted = CrytoLogin.encrypt(payload, config.rsaPublicKeyBase64());
             byte[] body = formEncode(encrypted).getBytes(StandardCharsets.UTF_8);
 
-            Map<String, String> headers = businessHeaders(PATH_GET_SMS, "POST", null);
+            String referer = pathType == SmsPathType.LOGIN ? LOGIN_REFERER : config.referer();
+            Map<String, String> headers = businessHeaders(PATH_GET_SMS, "POST", null, referer);
             headers.put("Content-Type", FORM_CONTENT_TYPE);
 
             String url = joinUrl(config.baseUrl(), PATH_GET_SMS);
@@ -109,7 +127,7 @@ public final class YcClient implements AutoCloseable {
     }
 
     /**
-     * Full flow: check mobile → captcha → getSmsCode.
+     * Reset-phone SMS full flow: check mobile → captcha → getSmsCode(pathType=11).
      * If check returns {@code code != 200}, returns that result without captcha/sms.
      */
     public ApiResult sendSms(String mobile) {
@@ -119,7 +137,18 @@ public final class YcClient implements AutoCloseable {
             return check;
         }
         CaptchaResult captcha = getCaptchaVerifyParam();
-        return getSmsCode(mobile, captcha.captchaVerifyParam());
+        return getSmsCode(mobile, captcha.captchaVerifyParam(), SmsPathType.RESET_PHONE);
+    }
+
+    /**
+     * Login-page SMS full flow ({@code isShow=login}): captcha → getSmsCode(pathType=5).
+     * No checkMemberMobileAvailable (frontend login does not call it before SMS).
+     */
+    public ApiResult sendLoginSms(String mobile) {
+        ensureOpen();
+        Objects.requireNonNull(mobile, "mobile");
+        CaptchaResult captcha = getCaptchaVerifyParam();
+        return getSmsCode(mobile, captcha.captchaVerifyParam(), SmsPathType.LOGIN);
     }
 
     public ApiResult replaceMobile(ReplaceMobileRequest req) {
@@ -174,10 +203,15 @@ public final class YcClient implements AutoCloseable {
     }
 
     private Map<String, String> businessHeaders(String path, String method, String accessTokenOrNull) {
+        return businessHeaders(path, method, accessTokenOrNull, config.referer());
+    }
+
+    private Map<String, String> businessHeaders(
+            String path, String method, String accessTokenOrNull, String referer) {
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("User-Agent", config.userAgent());
         headers.put("Origin", config.origin());
-        headers.put("Referer", config.referer());
+        headers.put("Referer", referer == null || referer.isBlank() ? config.referer() : referer);
         headers.put("channel", config.channel());
         headers.put("client", config.client());
         headers.putAll(GwSigner.sign(
