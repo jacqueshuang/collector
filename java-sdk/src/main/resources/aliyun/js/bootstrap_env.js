@@ -616,8 +616,22 @@
 
   g.__simulateDrag = async function () {
     var slider = g.document.getElementById("aliyunCaptcha-sliding-slider");
+    var body = g.document.getElementById("aliyunCaptcha-sliding-body");
     if (!slider) return false;
-    var startX = 120, startY = 120, endX = 440, endY = 120, distance = endX - startX;
+    // Derive distance from DOM rects (same as feilin_helper.js), not fixed 120→440.
+    var sr = slider.getBoundingClientRect ? slider.getBoundingClientRect() : { x: 100, y: 100, width: 40, height: 40 };
+    var br = body && body.getBoundingClientRect
+      ? body.getBoundingClientRect()
+      : { x: 100, y: 100, width: 360, height: 40 };
+    var startX = sr.x + sr.width / 2;
+    var startY = sr.y + sr.height / 2;
+    var endX = br.x + br.width - sr.width / 2;
+    var endY = br.y + br.height / 2;
+    var distance = endX - startX;
+    if (!(distance > 0)) {
+      // Fallback only if layout stubs missing entirely
+      startX = 120; startY = 120; endX = 440; endY = 120; distance = endX - startX;
+    }
     slider.dispatchEvent(new g.MouseEvent("mousedown", { bubbles: true, cancelable: true, clientX: startX, clientY: startY, button: 0, buttons: 1 }));
     await g.__sleep(80 + Math.random() * 120);
     var totalSteps = 80 + Math.floor(Math.random() * 20);

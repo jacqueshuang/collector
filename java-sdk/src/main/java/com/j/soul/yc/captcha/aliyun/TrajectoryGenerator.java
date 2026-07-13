@@ -8,18 +8,21 @@ import com.j.soul.yc.exception.YcStep;
 import com.j.soul.yc.http.HttpTransport;
 
 import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
-import java.util.Objects;
 import java.util.zip.Deflater;
 
 /**
  * Builds VerifyCaptchaV3 trajectory {@code data}.
  * Primary path: GraalJS full slider solve (fresh per session, no static sample default).
  * Secondary: synthetic TrackList plaintext helpers for tests / offline inspection.
+ * <p>
+ * Runtime resolution order for network solve:
+ * constructor {@code sharedRuntime} → {@link AliyunSession#jsRuntime()} → open new with
+ * session/arg {@link HttpTransport}. Prefer injecting one shared {@link CaptchaJsRuntime}
+ * into both this and {@link DeviceTokenProvider}.
  */
 public final class TrajectoryGenerator {
 
@@ -28,7 +31,6 @@ public final class TrajectoryGenerator {
 
     private final CaptchaJsRuntime sharedRuntime;
     private final YcClientConfig config;
-    private final boolean closeRuntime;
     private final int startX;
     private final int startY;
     private final int endX;
@@ -60,7 +62,6 @@ public final class TrajectoryGenerator {
                                int screenW, int screenH, int innerW, int innerH) {
         this.config = config;
         this.sharedRuntime = sharedRuntime;
-        this.closeRuntime = sharedRuntime == null;
         this.startX = startX;
         this.startY = startY;
         this.endX = endX;
@@ -76,7 +77,7 @@ public final class TrajectoryGenerator {
             throw new YcException(YcStep.CAPTCHA, "AliyunSession required");
         }
         try {
-            CaptchaSolveResult solved = solve(null);
+            CaptchaSolveResult solved = resolveAndSolve(session, session.httpTransport());
             session.setTrajectoryData(solved.data());
             if (session.deviceToken() == null && solved.deviceToken() != null) {
                 session.setDeviceToken(solved.deviceToken());
@@ -94,15 +95,27 @@ public final class TrajectoryGenerator {
 
     /**
      * Full solve returning data + deviceToken (+ optional securityToken).
+     * Uses constructor shared runtime when set; otherwise opens with {@code transport}.
      */
     public CaptchaSolveResult solve(HttpTransport transport) {
-        CaptchaJsRuntime runtime = null;
+        return resolveAndSolve(null, transport);
+    }
+
+    private CaptchaSolveResult resolveAndSolve(AliyunSession session, HttpTransport transport) {
+        CaptchaJsRuntime runtime = sharedRuntime;
+        if (runtime == null && session != null) {
+            runtime = session.jsRuntime();
+        }
+        boolean close = false;
         try {
-            if (sharedRuntime != null) {
-                runtime = sharedRuntime;
-            } else {
+            if (runtime == null) {
                 YcClientConfig cfg = config != null ? config : YcClientConfig.builder().build();
-                runtime = CaptchaJsRuntime.open(cfg, transport);
+                HttpTransport tx = transport;
+                if (tx == null && session != null) {
+                    tx = session.httpTransport();
+                }
+                runtime = CaptchaJsRuntime.open(cfg, tx);
+                close = true;
             }
             return runtime.solveSlider();
         } catch (YcException e) {
@@ -110,7 +123,7 @@ public final class TrajectoryGenerator {
         } catch (Exception e) {
             throw new YcException(YcStep.CAPTCHA, "trajectory solve failed: " + e.getMessage(), e);
         } finally {
-            if (closeRuntime && runtime != null) {
+            if (close && runtime != null) {
                 runtime.close();
             }
         }

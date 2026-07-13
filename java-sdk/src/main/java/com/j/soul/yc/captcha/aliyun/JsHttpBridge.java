@@ -8,11 +8,13 @@ import org.graalvm.polyglot.Value;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 
 /**
  * Java-backed XHR/fetch for GraalJS captcha scripts.
- * JS calls {@link #request(String, String, String, Value, Value)} asynchronously.
+ * HTTP runs on a worker pool; JS callbacks are queued and must be drained on the
+ * GraalJS Context owner thread ({@link #drainCallbacks()}).
  */
 public final class JsHttpBridge {
 
@@ -21,6 +23,7 @@ public final class JsHttpBridge {
     private final String userAgent;
     private final String origin;
     private final String referer;
+    private final ConcurrentLinkedQueue<Pending> pending = new ConcurrentLinkedQueue<>();
 
     public JsHttpBridge(HttpTransport transport, ExecutorService executor,
                         String userAgent, String origin, String referer) {
@@ -59,6 +62,7 @@ public final class JsHttpBridge {
                 : body.getBytes(StandardCharsets.UTF_8);
         final String contentType = hdr.getOrDefault("Content-Type",
                 hdr.getOrDefault("content-type", "application/x-www-form-urlencoded"));
+        final Value cb = callback;
 
         executor.execute(() -> {
             try {
@@ -66,15 +70,38 @@ public final class JsHttpBridge {
                 HttpResponse resp = transport.execute(req);
                 String text = new String(resp.body(), StandardCharsets.UTF_8);
                 String headersJson = toHeadersJson(resp.headers());
-                callback.execute(resp.status(), text, headersJson);
+                pending.offer(new Pending(cb, resp.status(), text, headersJson));
             } catch (Exception e) {
-                try {
-                    callback.execute(0, "", "{}");
-                } catch (Exception ignored) {
-                    // JS context may already be closed
-                }
+                pending.offer(new Pending(cb, 0, "", "{}"));
             }
         });
+    }
+
+    /**
+     * Invoke queued JS callbacks on the Context owner thread.
+     * Must not be called from HTTP worker threads.
+     *
+     * @return number of callbacks executed
+     */
+    public int drainCallbacks() {
+        int n = 0;
+        Pending p;
+        while ((p = pending.poll()) != null) {
+            if (p.callback != null && p.callback.canExecute()) {
+                try {
+                    p.callback.execute(p.status, p.text, p.headersJson);
+                } catch (Exception ignored) {
+                    // context may already be closed
+                }
+            }
+            n++;
+        }
+        return n;
+    }
+
+    /** Test/support: pending completions not yet drained. */
+    int pendingCount() {
+        return pending.size();
     }
 
     private static String toHeadersJson(Map<String, String> headers) {
@@ -102,5 +129,19 @@ public final class JsHttpBridge {
             return "";
         }
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
+    }
+
+    private static final class Pending {
+        final Value callback;
+        final int status;
+        final String text;
+        final String headersJson;
+
+        Pending(Value callback, int status, String text, String headersJson) {
+            this.callback = callback;
+            this.status = status;
+            this.text = text == null ? "" : text;
+            this.headersJson = headersJson == null ? "{}" : headersJson;
+        }
     }
 }

@@ -9,7 +9,9 @@ import java.util.Objects;
 
 /**
  * Produces Aliyun captcha {@code deviceToken} via in-process GraalJS (um/z_um.getToken).
- * Optional external {@link CaptchaJsRuntime} can be injected for shared sessions.
+ * Runtime resolution: constructor shared → {@link AliyunSession#jsRuntime()} → open new
+ * with arg/session {@link HttpTransport}. Prefer one shared {@link CaptchaJsRuntime}
+ * with {@link TrajectoryGenerator}.
  */
 public final class DeviceTokenProvider {
 
@@ -36,11 +38,13 @@ public final class DeviceTokenProvider {
 
     public String obtain(HttpTransport transport, AliyunSession session) {
         Objects.requireNonNull(session, "session");
-        boolean close = sharedRuntime == null;
-        CaptchaJsRuntime runtime = sharedRuntime;
+        CaptchaJsRuntime runtime = sharedRuntime != null ? sharedRuntime : session.jsRuntime();
+        boolean close = false;
         try {
             if (runtime == null) {
-                runtime = CaptchaJsRuntime.open(config, transport);
+                HttpTransport tx = transport != null ? transport : session.httpTransport();
+                runtime = CaptchaJsRuntime.open(config, tx);
+                close = true;
             }
             String token = runtime.getDeviceToken();
             session.setDeviceToken(token);

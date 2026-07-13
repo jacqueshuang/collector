@@ -35,6 +35,7 @@ public final class CaptchaJsRuntime implements AutoCloseable {
 
     private final Context context;
     private final ExecutorService httpExecutor;
+    private final JsHttpBridge httpBridge;
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final Path reconDir;
     private final String prefix;
@@ -44,6 +45,7 @@ public final class CaptchaJsRuntime implements AutoCloseable {
 
     private CaptchaJsRuntime(Context context,
                              ExecutorService httpExecutor,
+                             JsHttpBridge httpBridge,
                              Path reconDir,
                              String prefix,
                              String sceneId,
@@ -51,6 +53,7 @@ public final class CaptchaJsRuntime implements AutoCloseable {
                              boolean ownTransport) {
         this.context = context;
         this.httpExecutor = httpExecutor;
+        this.httpBridge = httpBridge;
         this.reconDir = reconDir;
         this.prefix = prefix;
         this.sceneId = sceneId;
@@ -100,9 +103,9 @@ public final class CaptchaJsRuntime implements AutoCloseable {
                 .option("engine.WarnInterpreterOnly", "false")
                 .build();
 
-        CaptchaJsRuntime runtime = new CaptchaJsRuntime(ctx, exec, reconDir, prefix, sceneId, tx, own);
+        CaptchaJsRuntime runtime = new CaptchaJsRuntime(ctx, exec, bridge, reconDir, prefix, sceneId, tx, own);
         try {
-            runtime.install(bridge);
+            runtime.install();
         } catch (RuntimeException e) {
             runtime.close();
             throw e;
@@ -110,9 +113,9 @@ public final class CaptchaJsRuntime implements AutoCloseable {
         return runtime;
     }
 
-    private void install(JsHttpBridge bridge) {
+    private void install() {
         Value bindings = context.getBindings("js");
-        bindings.putMember("__javaHttp", bridge);
+        bindings.putMember("__javaHttp", httpBridge);
 
         evalResource("/aliyun/js/bootstrap_env.js", "bootstrap_env.js");
 
@@ -209,6 +212,11 @@ public final class CaptchaJsRuntime implements AutoCloseable {
         return reconDir;
     }
 
+    /** Shared transport used by this runtime's JS HTTP bridge. */
+    public HttpTransport transport() {
+        return transport;
+    }
+
     /**
      * Obtain deviceToken via um/z_um.getToken after captcha SDK init (network).
      */
@@ -299,20 +307,8 @@ public final class CaptchaJsRuntime implements AutoCloseable {
         if (promise == null || promise.isNull()) {
             return null;
         }
-        // GraalJS thenable
+        // GraalJS thenable: resolve on this thread; HTTP completions drained here only.
         if (promise.canInvokeMember("then")) {
-            final Value[] box = new Value[1];
-            final Object[] err = new Object[1];
-            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
-            Value onFulfilled = context.asValue((java.util.function.Consumer<Value>) v -> {
-                box[0] = v;
-                latch.countDown();
-            });
-            Value onRejected = context.asValue((java.util.function.Consumer<Value>) v -> {
-                err[0] = v;
-                latch.countDown();
-            });
-            // Prefer JS-side then to avoid HostAccess issues with Java lambdas:
             context.getBindings("js").putMember("__p", promise);
             context.eval("js",
                     "globalThis.__awaitBox={done:false,val:null,err:null};" +
@@ -320,6 +316,8 @@ public final class CaptchaJsRuntime implements AutoCloseable {
                             "function(e){globalThis.__awaitBox.done=true;globalThis.__awaitBox.err=e;});");
             long deadline = System.nanoTime() + timeout.toNanos();
             while (System.nanoTime() < deadline) {
+                // Drain HTTP→JS callbacks on context owner thread (never on worker).
+                httpBridge.drainCallbacks();
                 Value boxState = context.getBindings("js").getMember("__awaitBox");
                 if (boxState != null && boxState.hasMember("done") && boxState.getMember("done").asBoolean()) {
                     Value errV = boxState.getMember("err");
