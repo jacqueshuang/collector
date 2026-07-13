@@ -1,10 +1,16 @@
 package com.j.soul.yc.model;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class ApiResult {
     private Integer code;
+
+    @JsonAlias("message")
     private String msg;
+
     private JsonNode data;
 
     public ApiResult() {
