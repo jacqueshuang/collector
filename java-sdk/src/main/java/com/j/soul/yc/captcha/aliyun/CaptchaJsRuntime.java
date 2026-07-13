@@ -251,7 +251,8 @@ public final class CaptchaJsRuntime implements AutoCloseable {
                 throw new YcException(YcStep.CAPTCHA, "__solveCaptcha missing");
             }
             Value promise = fn.execute(prefix, sceneId);
-            Value result = awaitValue(promise, Duration.ofSeconds(90));
+            // init sleep 8s + drag sleeps + up to 15s verify wait; allow headroom
+            Value result = awaitValue(promise, Duration.ofSeconds(180));
             if (result == null || result.isNull()) {
                 throw new YcException(YcStep.CAPTCHA, "solveSlider returned null");
             }
@@ -318,6 +319,12 @@ public final class CaptchaJsRuntime implements AutoCloseable {
             while (System.nanoTime() < deadline) {
                 // Drain HTTP→JS callbacks on context owner thread (never on worker).
                 httpBridge.drainCallbacks();
+                // Pump polyfilled setTimeout/setInterval used by __sleep / SDK.
+                try {
+                    context.eval("js",
+                            "if (typeof globalThis.__drainTimers==='function') globalThis.__drainTimers();");
+                } catch (Exception ignored) {
+                }
                 Value boxState = context.getBindings("js").getMember("__awaitBox");
                 if (boxState != null && boxState.hasMember("done") && boxState.getMember("done").asBoolean()) {
                     Value errV = boxState.getMember("err");
@@ -326,12 +333,7 @@ public final class CaptchaJsRuntime implements AutoCloseable {
                     }
                     return boxState.getMember("val");
                 }
-                // allow JS timers / jobs
-                try {
-                    context.eval("js", "void 0");
-                } catch (Exception ignored) {
-                }
-                Thread.sleep(20);
+                Thread.sleep(10);
             }
             throw new YcException(YcStep.CAPTCHA, "js promise timeout after " + timeout);
         }

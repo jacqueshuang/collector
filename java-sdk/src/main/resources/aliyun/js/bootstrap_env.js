@@ -135,8 +135,50 @@
     return arr;
   };
 
-  g.requestAnimationFrame = g.requestAnimationFrame || function (cb) { return setTimeout(function () { cb(Date.now()); }, 16); };
-  g.cancelAnimationFrame = g.cancelAnimationFrame || function (id) { clearTimeout(id); };
+  // GraalJS has no browser event loop; host drains these from CaptchaJsRuntime.awaitValue.
+  g.__timers = [];
+  g.__timerSeq = 1;
+  g.setTimeout = function (fn, ms) {
+    var id = g.__timerSeq++;
+    var delay = typeof ms === "number" && ms > 0 ? ms : 0;
+    g.__timers.push({ id: id, due: Date.now() + delay, fn: fn, interval: 0 });
+    return id;
+  };
+  g.clearTimeout = function (id) {
+    g.__timers = g.__timers.filter(function (t) { return t.id !== id; });
+  };
+  g.setInterval = function (fn, ms) {
+    var id = g.__timerSeq++;
+    var delay = typeof ms === "number" && ms > 0 ? ms : 0;
+    g.__timers.push({ id: id, due: Date.now() + delay, fn: fn, interval: delay || 1 });
+    return id;
+  };
+  g.clearInterval = g.clearTimeout;
+  g.__drainTimers = function () {
+    var now = Date.now();
+    var fired = 0;
+    var keep = [];
+    var due = [];
+    for (var i = 0; i < g.__timers.length; i++) {
+      var t = g.__timers[i];
+      if (t.due <= now) due.push(t);
+      else keep.push(t);
+    }
+    g.__timers = keep;
+    for (var j = 0; j < due.length; j++) {
+      var task = due[j];
+      try { if (typeof task.fn === "function") task.fn(); } catch (e) {}
+      fired++;
+      if (task.interval > 0) {
+        task.due = Date.now() + task.interval;
+        g.__timers.push(task);
+      }
+    }
+    return fired;
+  };
+
+  g.requestAnimationFrame = function (cb) { return g.setTimeout(function () { cb(Date.now()); }, 16); };
+  g.cancelAnimationFrame = function (id) { g.clearTimeout(id); };
 
   g.MutationObserver = g.MutationObserver || function () { this.observe = function () {}; this.disconnect = function () {}; this.takeRecords = function () { return []; }; };
   g.ResizeObserver = g.ResizeObserver || function () { this.observe = function () {}; this.disconnect = function () {}; this.unobserve = function () {}; };
