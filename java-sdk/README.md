@@ -99,28 +99,75 @@ YcClientConfig.builder().transportType(TransportType.CURL4J).build();  // system
 
 Custom transport: `YcClient.builder().transport(myHttpTransport)`.
 
-## High concurrency
+## High concurrency (target: 500 simultaneous)
 
-Captcha is the bottleneck (~40–60s / solve, heavy DOM+JS). Design:
+Captcha is the bottleneck (~40–60s / solve, ~100–300MB RAM per HtmlUnit session).
 
-1. **One singleton `YcClient` bean** — share OkHttp pool; never create a client per request.
-2. **Captcha concurrency cap** — fair semaphore (`captchaConcurrency`, default 2..8). Excess callers wait up to `captchaAcquireTimeout`, then fail with `CAPTCHA saturated`.
-3. **Isolated sessions** — each solve opens/closes its own HtmlUnit `WebClient` (not multi-thread-safe per instance).
-4. **Business HTTP** — check-mobile / getSms / replace scale with the OkHttp pool.
+### What the SDK does
+
+1. **One singleton `YcClient`** — share OkHttp pool; never create a client per request.
+2. **Captcha concurrency** — fair semaphore `captchaConcurrency` (default 2..8, **can set to 500**).
+3. **Isolated sessions** — each solve opens/closes its own HtmlUnit `WebClient`.
+4. **Batch helper** — `YcSmsBatchExecutor` fans out many numbers onto a worker pool.
+
+### Honest capacity
+
+| Setup | Concurrent captcha | Rough RAM | Notes |
+|-------|--------------------|-----------|--------|
+| Default single process | 2–8 | few GB | safe laptop/server |
+| Beefy single process | 50–100 | 10–30GB | possible with large heap |
+| **500 true concurrent** | 500 | **50–150GB class** | usually **multi-machine** |
+| Cluster 10 × 50 | 500 | 10× mid boxes | **recommended** |
+
+`captchaConcurrency(500)` is allowed by config, but one JVM with 500 HtmlUnit browsers will usually OOM or thrash unless the machine is huge.
+
+### Single-process batch API
 
 ```java
-YcClientConfig.builder()
-    .reconDir(reconDir)
-    .captchaConcurrency(4)                         // tune to CPU/RAM (each ~100–300MB peak)
-    .captchaAcquireTimeout(Duration.ofSeconds(90))
-    .httpMaxRequests(128)
-    .httpMaxRequestsPerHost(64)
-    .httpMaxIdleConnections(64)
-    .readTimeout(Duration.ofSeconds(60))
+YcClient client = YcClient.builder()
+    .config(YcClientConfig.builder()
+        .reconDir(reconDir)
+        .captchaConcurrency(50)                    // true parallel captcha slots
+        .captchaAcquireTimeout(Duration.ofHours(2))
+        .httpMaxRequests(256)
+        .httpMaxRequestsPerHost(128)
+        .httpMaxIdleConnections(128)
+        .readTimeout(Duration.ofSeconds(90))
+        .build())
     .build();
+
+try (YcSmsBatchExecutor batch = YcSmsBatchExecutor.builder()
+        .client(client)
+        .workers(50)                               // keep captcha slots busy
+        .build()) {
+    SmsBatchReport report = batch.sendSms(mobileList); // e.g. 1000 numbers
+    System.out.println(report.successCount() + "/" + report.total()
+            + " ok in " + report.elapsedMs() + "ms");
+    report.failures().forEach(f ->
+            System.out.println(f.mobile() + " -> " + f.error() + " / " + f.apiResult()));
+}
 ```
 
-Prefer an app-level queue/rate-limit so captcha slots are not hammered.
+### Reach 500 concurrent (recommended)
+
+Run **N instances** (K8s / 多机 / 多进程), each with part of the number list:
+
+```text
+instance-1: captchaConcurrency=50, workers=50, numbers[0..99]
+instance-2: captchaConcurrency=50, workers=50, numbers[100..199]
+...
+instance-10: ...  → 10 × 50 = 500 concurrent captcha solves
+```
+
+Same `reconDir` path (or same mounted volume) on every instance — read-only, safe to share.
+
+### Single host “set 500” (only if RAM allows)
+
+```java
+.captchaConcurrency(500)
+// JVM: -Xmx128g or higher; expect severe load on CPU + network
+.workers(500)
+```
 
 ## Captcha / HtmlUnit (default)
 
