@@ -25,22 +25,180 @@ cd java-sdk && mvn -q clean test install
 </dependency>
 ```
 
-## Spring Boot (manual bean)
+## Spring Boot 使用说明
+
+SDK **无 Spring Boot Starter**，在业务项目中手动注册 `@Bean`。  
+**`YcClient` / `YcSmsBatchExecutor` 必须单例**，不要在请求里反复 `builder().build()`。
+
+### application.yml
+
+```yaml
+yc:
+  recon-dir: /data/perfect99/recon   # 必填：含 AliyunCaptcha.js、feilin094.js
+  captcha-concurrency: 50            # 同时过滑块的路数（受内存限制，每路约 100–300MB）
+  captcha-acquire-timeout: 2h        # 抢不到滑块槽位的最长等待
+  batch-workers: 50                  # 批量发送线程数，建议 ≥ captcha-concurrency
+  max-batch-size: 500                # 单次批量号码上限，超过直接报错
+  http-max-requests: 256
+  http-max-requests-per-host: 128
+```
+
+### 配置类
 
 ```java
-@Bean(destroyMethod = "close")
-YcClient ycClient(@Value("${yc.recon-dir}") String reconDir) {
-    return YcClient.builder()
-            .config(YcClientConfig.builder()
-                    .reconDir(reconDir)                 // required for local Aliyun/FeiLin SDK scripts
-                    .captchaEngine("htmlunit")          // default; or "graal"
-                    .transportType(TransportType.OKHTTP) // or TransportType.CURL4J
-                    .build())
-            .build();
+package com.example.config;
+
+import com.j.soul.yc.YcClient;
+import com.j.soul.yc.batch.YcSmsBatchExecutor;
+import com.j.soul.yc.config.YcClientConfig;
+import com.j.soul.yc.http.TransportType;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.time.Duration;
+
+@Configuration
+public class YcConfig {
+
+    @Bean(destroyMethod = "close")
+    public YcClient ycClient(
+            @Value("${yc.recon-dir}") String reconDir,
+            @Value("${yc.captcha-concurrency:50}") int captchaConcurrency,
+            @Value("${yc.captcha-acquire-timeout:2h}") Duration captchaAcquireTimeout,
+            @Value("${yc.http-max-requests:256}") int httpMaxRequests,
+            @Value("${yc.http-max-requests-per-host:128}") int httpMaxPerHost
+    ) {
+        return YcClient.builder()
+                .config(YcClientConfig.builder()
+                        .reconDir(reconDir)
+                        .captchaEngine("htmlunit")
+                        .transportType(TransportType.OKHTTP)
+                        .captchaConcurrency(captchaConcurrency)
+                        .captchaAcquireTimeout(captchaAcquireTimeout)
+                        .httpMaxRequests(httpMaxRequests)
+                        .httpMaxRequestsPerHost(httpMaxPerHost)
+                        .httpMaxIdleConnections(httpMaxPerHost)
+                        .readTimeout(Duration.ofSeconds(90))
+                        .build())
+                .build();
+    }
+
+    @Bean(destroyMethod = "close")
+    public YcSmsBatchExecutor ycSmsBatchExecutor(
+            YcClient ycClient,
+            @Value("${yc.batch-workers:50}") int workers,
+            @Value("${yc.max-batch-size:500}") int maxBatchSize
+    ) {
+        return YcSmsBatchExecutor.builder()
+                .client(ycClient)
+                .workers(workers)
+                .maxBatchSize(maxBatchSize)
+                .build();
+    }
 }
 ```
 
-Minimal non-Spring usage:
+### 单发短信
+
+```java
+@RestController
+@RequestMapping("/api/sms")
+public class SmsController {
+
+    private final YcClient ycClient;
+
+    public SmsController(YcClient ycClient) {
+        this.ycClient = ycClient;
+    }
+
+    @PostMapping("/send")
+    public Map<String, Object> send(@RequestBody Map<String, String> body) {
+        // check → captcha → getSmsCode；单次约 40–60s，注意网关超时
+        var r = ycClient.sendSms(body.get("mobile"));
+        return Map.of(
+                "code", r.getCode(),
+                "msg", r.getMsg() == null ? "" : r.getMsg(),
+                "data", r.getData() == null ? "" : r.getData()
+        );
+    }
+}
+```
+
+其他单接口：`checkMobileAvailable` · `getCaptchaVerifyParam` · `getSmsCode` · `replaceMobile`。
+
+### 批量发送（多号码并行）
+
+```java
+@RestController
+@RequestMapping("/api/sms")
+public class SmsBatchController {
+
+    private final YcSmsBatchExecutor batchExecutor;
+
+    public SmsBatchController(YcSmsBatchExecutor batchExecutor) {
+        this.batchExecutor = batchExecutor;
+    }
+
+    @PostMapping("/batch")
+    public Map<String, Object> batch(@RequestBody List<String> mobiles) {
+        // 超过 maxBatchSize → YcException，不会进入滑块/HTTP
+        var report = batchExecutor.sendSms(mobiles);
+        return Map.of(
+                "total", report.total(),
+                "success", report.successCount(),
+                "failure", report.failureCount(),
+                "elapsedMs", report.elapsedMs(),
+                "failures", report.failures().stream()
+                        .map(f -> Map.of(
+                                "mobile", f.mobile(),
+                                "error", f.error() == null ? "" : f.error(),
+                                "code", f.apiResult() == null ? "" : String.valueOf(f.apiResult().getCode())
+                        ))
+                        .toList()
+        );
+    }
+}
+```
+
+### 统一异常处理
+
+```java
+@RestControllerAdvice
+public class YcExceptionHandler {
+
+    @ExceptionHandler(YcException.class)
+    public ResponseEntity<Map<String, Object>> handle(YcException e) {
+        // 例如：batch size 超过 maxBatchSize、captcha saturated、HTTP 失败
+        return ResponseEntity.badRequest().body(Map.of(
+                "step", e.getStep().name(),
+                "message", e.getMessage()
+        ));
+    }
+}
+```
+
+### 参数对照（Spring 侧）
+
+| yml / 配置 | 含义 |
+|------------|------|
+| `yc.recon-dir` | 验证码 JS 目录（只读，多实例可共用） |
+| `yc.captcha-concurrency` | **同时**过滑块的浏览器会话数 |
+| `yc.batch-workers` | 提交 `sendSms` 的线程数，建议 ≥ concurrency |
+| `yc.max-batch-size` | **一次批量接口**最多几个号，超限直接报错 |
+| `yc.captcha-acquire-timeout` | 等滑块槽位的最长时间 |
+
+例：`max-batch-size=500` 且 `captcha-concurrency=50` → 一次最多接 500 号，但同一时刻约 50 路在过滑块，其余排队。
+
+### Spring Boot 注意点
+
+1. **单例 Bean**：`YcClient` / `YcSmsBatchExecutor` 各一个；禁止 per-request 新建。
+2. **超时**：单次 `sendSms` 常 40–60s；同步 HTTP 接口需调大网关/Tomcat 超时，大批量建议改异步任务。
+3. **内存**：`captcha-concurrency` 按机器调；不要轻易上 500 路单机 HtmlUnit。
+4. **部署**：容器/机器上必须挂载可读的 `recon-dir`。
+5. **同 reconDir 多线程/多实例**：安全（只读脚本）。
+
+### Minimal non-Spring usage
 
 ```java
 try (YcClient client = YcClient.builder()
@@ -52,7 +210,7 @@ try (YcClient client = YcClient.builder()
 }
 ```
 
-Public API: `checkMobileAvailable` · `getCaptchaVerifyParam` · `getSmsCode` · `sendSms` · `replaceMobile`.
+Public API: `checkMobileAvailable` · `getCaptchaVerifyParam` · `getSmsCode` · `sendSms` · `replaceMobile` · 批量 `YcSmsBatchExecutor#sendSms`.
 
 ## Config (`YcClientConfig`)
 
