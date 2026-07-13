@@ -3,6 +3,8 @@ package com.j.soul.yc.http;
 import com.j.soul.yc.config.YcClientConfig;
 import com.j.soul.yc.exception.YcException;
 import com.j.soul.yc.exception.YcStep;
+import okhttp3.ConnectionPool;
+import okhttp3.Dispatcher;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -15,15 +17,28 @@ import java.net.Proxy;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 
 public final class OkHttpTransport implements HttpTransport {
     private final OkHttpClient client;
 
     public OkHttpTransport(YcClientConfig config) {
         Objects.requireNonNull(config, "config");
+        Dispatcher dispatcher = new Dispatcher();
+        dispatcher.setMaxRequests(config.httpMaxRequests());
+        dispatcher.setMaxRequestsPerHost(config.httpMaxRequestsPerHost());
+
         OkHttpClient.Builder builder = new OkHttpClient.Builder()
+                .dispatcher(dispatcher)
+                .connectionPool(new ConnectionPool(
+                        config.httpMaxIdleConnections(),
+                        5,
+                        TimeUnit.MINUTES))
+                .retryOnConnectionFailure(true)
                 .connectTimeout(config.connectTimeout())
-                .readTimeout(config.readTimeout());
+                .readTimeout(config.readTimeout())
+                .writeTimeout(config.readTimeout())
+                .callTimeout(config.readTimeout().plus(config.connectTimeout()));
         if (hasProxy(config)) {
             builder.proxy(new Proxy(
                     Proxy.Type.HTTP,

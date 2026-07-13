@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.util.Base64;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -111,7 +112,7 @@ class AliyunCaptchaProviderTest {
     }
 
     @Test
-    void provider_smokeOpenRuntime_whenReconPresent() {
+    void provider_smokeConfig_whenReconPresent() {
         Optional<Path> recon = CaptchaJsRuntime.resolveReconDir(
                 Path.of("..", "..", "recon").toAbsolutePath().normalize().toString());
         if (recon.isEmpty()) {
@@ -120,11 +121,92 @@ class AliyunCaptchaProviderTest {
         if (recon.isEmpty()) {
             return;
         }
-        YcClientConfig cfg = YcClientConfig.builder().reconDir(recon.get().toString()).build();
-        try (CaptchaJsRuntime rt = CaptchaJsRuntime.open(cfg);
-             AliyunCaptchaProvider p = new AliyunCaptchaProvider(cfg, rt.transport(), rt)) {
-            assertTrue(rt.hasInit());
+        YcClientConfig cfg = YcClientConfig.builder()
+                .reconDir(recon.get().toString())
+                .captchaConcurrency(3)
+                .build();
+        try (AliyunCaptchaProvider p = new AliyunCaptchaProvider(cfg, null)) {
             assertEquals(cfg.sceneId(), p.captchaConfig().sceneId());
+            assertEquals(3, p.availablePermits());
+        }
+    }
+
+    @Test
+    void concurrentSolves_respectConcurrencyLimit() throws Exception {
+        int concurrency = 2;
+        AtomicInteger inFlight = new AtomicInteger();
+        AtomicInteger maxInFlight = new AtomicInteger();
+        AtomicInteger completed = new AtomicInteger();
+
+        YcClientConfig cfg = YcClientConfig.builder()
+                .captchaConcurrency(concurrency)
+                .captchaAcquireTimeout(java.time.Duration.ofSeconds(5))
+                .build();
+
+        Supplier<CaptchaSolveResult> slowSolve = () -> {
+            int now = inFlight.incrementAndGet();
+            maxInFlight.accumulateAndGet(now, Math::max);
+            try {
+                Thread.sleep(120);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            } finally {
+                inFlight.decrementAndGet();
+            }
+            completed.incrementAndGet();
+            return new CaptchaSolveResult("cid", "dt", "data", "stok", Boolean.TRUE);
+        };
+
+        try (AliyunCaptchaProvider p = new AliyunCaptchaProvider(cfg, null, slowSolve)) {
+            int n = 8;
+            java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(n);
+            try {
+                java.util.List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
+                for (int i = 0; i < n; i++) {
+                    futures.add(pool.submit(p::getCaptchaVerifyParam));
+                }
+                for (java.util.concurrent.Future<?> f : futures) {
+                    f.get(10, java.util.concurrent.TimeUnit.SECONDS);
+                }
+            } finally {
+                pool.shutdownNow();
+            }
+            assertEquals(n, completed.get());
+            assertTrue(maxInFlight.get() <= concurrency,
+                    "max in-flight " + maxInFlight.get() + " > " + concurrency);
+            assertTrue(maxInFlight.get() >= 1);
+            assertEquals(concurrency, p.availablePermits());
+        }
+    }
+
+    @Test
+    void acquireTimeout_whenSaturated() throws Exception {
+        YcClientConfig cfg = YcClientConfig.builder()
+                .captchaConcurrency(1)
+                .captchaAcquireTimeout(java.time.Duration.ofMillis(80))
+                .build();
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        Supplier<CaptchaSolveResult> blocker = () -> {
+            entered.countDown();
+            try {
+                Thread.sleep(1_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return new CaptchaSolveResult("cid", "dt", "data", "stok", Boolean.TRUE);
+        };
+        try (AliyunCaptchaProvider p = new AliyunCaptchaProvider(cfg, null, blocker)) {
+            Thread t = new Thread(p::getCaptchaVerifyParam);
+            t.start();
+            try {
+                assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
+                YcException ex = assertThrows(YcException.class, p::getCaptchaVerifyParam);
+                assertEquals(YcStep.CAPTCHA, ex.getStep());
+                assertTrue(ex.getMessage().contains("saturated"));
+            } finally {
+                t.join(2_000);
+            }
         }
     }
 

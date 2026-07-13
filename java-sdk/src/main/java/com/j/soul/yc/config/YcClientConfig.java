@@ -25,6 +25,16 @@ public final class YcClientConfig {
     private final String reconDir;
     /** Captcha host engine: {@code htmlunit} (default) or {@code graal}. */
     private final String captchaEngine;
+    /** Max concurrent captcha solves on one provider (HtmlUnit is not multi-thread-safe per instance). */
+    private final int captchaConcurrency;
+    /** Wait for a captcha concurrency permit before failing. */
+    private final Duration captchaAcquireTimeout;
+    /** OkHttp dispatcher max concurrent requests. */
+    private final int httpMaxRequests;
+    /** OkHttp dispatcher max concurrent requests per host. */
+    private final int httpMaxRequestsPerHost;
+    /** OkHttp idle connections kept in pool. */
+    private final int httpMaxIdleConnections;
 
     private YcClientConfig(Builder builder) {
         this.baseUrl = builder.baseUrl;
@@ -45,6 +55,11 @@ public final class YcClientConfig {
         this.proxyPort = builder.proxyPort;
         this.reconDir = builder.reconDir;
         this.captchaEngine = builder.captchaEngine;
+        this.captchaConcurrency = builder.captchaConcurrency;
+        this.captchaAcquireTimeout = builder.captchaAcquireTimeout;
+        this.httpMaxRequests = builder.httpMaxRequests;
+        this.httpMaxRequestsPerHost = builder.httpMaxRequestsPerHost;
+        this.httpMaxIdleConnections = builder.httpMaxIdleConnections;
     }
 
     public static Builder builder() {
@@ -133,6 +148,27 @@ public final class YcClientConfig {
         return captchaEngine;
     }
 
+    /** Max parallel captcha solves; each solve uses an isolated HtmlUnit/Graal session. */
+    public int captchaConcurrency() {
+        return captchaConcurrency;
+    }
+
+    public Duration captchaAcquireTimeout() {
+        return captchaAcquireTimeout;
+    }
+
+    public int httpMaxRequests() {
+        return httpMaxRequests;
+    }
+
+    public int httpMaxRequestsPerHost() {
+        return httpMaxRequestsPerHost;
+    }
+
+    public int httpMaxIdleConnections() {
+        return httpMaxIdleConnections;
+    }
+
     public static final class Builder {
         private String baseUrl = "https://uc.perfect99.com/api";
         private String userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
@@ -152,6 +188,11 @@ public final class YcClientConfig {
         private Integer proxyPort;
         private String reconDir;
         private String captchaEngine = "htmlunit";
+        private int captchaConcurrency = Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors()));
+        private Duration captchaAcquireTimeout = Duration.ofSeconds(120);
+        private int httpMaxRequests = 64;
+        private int httpMaxRequestsPerHost = 32;
+        private int httpMaxIdleConnections = 32;
 
         public Builder baseUrl(String baseUrl) {
             this.baseUrl = Objects.requireNonNull(baseUrl);
@@ -243,6 +284,44 @@ public final class YcClientConfig {
             this.captchaEngine = captchaEngine == null || captchaEngine.isBlank()
                     ? "htmlunit"
                     : captchaEngine.trim().toLowerCase();
+            return this;
+        }
+
+        /** Max concurrent captcha solves (>=1). Default ~CPU capped to 2..8. */
+        public Builder captchaConcurrency(int captchaConcurrency) {
+            if (captchaConcurrency < 1) {
+                throw new IllegalArgumentException("captchaConcurrency must be >= 1");
+            }
+            this.captchaConcurrency = captchaConcurrency;
+            return this;
+        }
+
+        public Builder captchaAcquireTimeout(Duration captchaAcquireTimeout) {
+            this.captchaAcquireTimeout = Objects.requireNonNull(captchaAcquireTimeout);
+            return this;
+        }
+
+        public Builder httpMaxRequests(int httpMaxRequests) {
+            if (httpMaxRequests < 1) {
+                throw new IllegalArgumentException("httpMaxRequests must be >= 1");
+            }
+            this.httpMaxRequests = httpMaxRequests;
+            return this;
+        }
+
+        public Builder httpMaxRequestsPerHost(int httpMaxRequestsPerHost) {
+            if (httpMaxRequestsPerHost < 1) {
+                throw new IllegalArgumentException("httpMaxRequestsPerHost must be >= 1");
+            }
+            this.httpMaxRequestsPerHost = httpMaxRequestsPerHost;
+            return this;
+        }
+
+        public Builder httpMaxIdleConnections(int httpMaxIdleConnections) {
+            if (httpMaxIdleConnections < 0) {
+                throw new IllegalArgumentException("httpMaxIdleConnections must be >= 0");
+            }
+            this.httpMaxIdleConnections = httpMaxIdleConnections;
             return this;
         }
 

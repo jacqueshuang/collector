@@ -75,6 +75,11 @@ Public API: `checkMobileAvailable` · `getCaptchaVerifyParam` · `getSmsCode` ·
 | `proxyHost` / `proxyPort` | empty | optional HTTP proxy |
 | `reconDir` | null → auto | Aliyun/FeiLin SDK scripts dir (**required for captcha**) |
 | `captchaEngine` | `htmlunit` | `htmlunit` (full DOM) \| `graal` (minimal bootstrap) |
+| `captchaConcurrency` | CPU 2..8 | max parallel captcha solves (each = isolated browser) |
+| `captchaAcquireTimeout` | 120s | wait for free captcha slot before failing |
+| `httpMaxRequests` | 64 | OkHttp dispatcher global concurrency |
+| `httpMaxRequestsPerHost` | 32 | OkHttp per-host concurrency |
+| `httpMaxIdleConnections` | 32 | OkHttp connection pool idle size |
 
 `reconDir` must contain `feilin094.js` (also expects `sg029.js`, `AliyunCaptcha.js`).  
 Resolution order when unset: `YC_RECON_DIR` → relative `../recon`, `../../recon`, `recon`.  
@@ -89,10 +94,33 @@ YcClientConfig.builder().transportType(TransportType.OKHTTP).build(); // default
 YcClientConfig.builder().transportType(TransportType.CURL4J).build();  // system curl CLI
 ```
 
-- **OKHTTP** — OkHttp 4.x (default).
-- **CURL4J** — phase-1 backend spawns system `curl` via `ProcessBuilder` (not a Maven libcurl binding). Requires `curl` on `PATH`.
+- **OKHTTP** — OkHttp 4.x (default), connection-pooled; tune `httpMaxRequests*` for multi-thread.
+- **CURL4J** — phase-1 backend spawns system `curl` via `ProcessBuilder` (not a Maven libcurl binding). Requires `curl` on `PATH`. Prefer OKHTTP under concurrency.
 
 Custom transport: `YcClient.builder().transport(myHttpTransport)`.
+
+## High concurrency
+
+Captcha is the bottleneck (~40–60s / solve, heavy DOM+JS). Design:
+
+1. **One singleton `YcClient` bean** — share OkHttp pool; never create a client per request.
+2. **Captcha concurrency cap** — fair semaphore (`captchaConcurrency`, default 2..8). Excess callers wait up to `captchaAcquireTimeout`, then fail with `CAPTCHA saturated`.
+3. **Isolated sessions** — each solve opens/closes its own HtmlUnit `WebClient` (not multi-thread-safe per instance).
+4. **Business HTTP** — check-mobile / getSms / replace scale with the OkHttp pool.
+
+```java
+YcClientConfig.builder()
+    .reconDir(reconDir)
+    .captchaConcurrency(4)                         // tune to CPU/RAM (each ~100–300MB peak)
+    .captchaAcquireTimeout(Duration.ofSeconds(90))
+    .httpMaxRequests(128)
+    .httpMaxRequestsPerHost(64)
+    .httpMaxIdleConnections(64)
+    .readTimeout(Duration.ofSeconds(60))
+    .build();
+```
+
+Prefer an app-level queue/rate-limit so captcha slots are not hammered.
 
 ## Captcha / HtmlUnit (default)
 
