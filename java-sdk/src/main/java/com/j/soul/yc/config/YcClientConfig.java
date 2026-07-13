@@ -20,6 +20,8 @@ public final class YcClientConfig {
     private final TransportType transportType;
     private final Duration connectTimeout;
     private final Duration readTimeout;
+    private final String proxyHost;
+    private final Integer proxyPort;
 
     private YcClientConfig(Builder builder) {
         this.baseUrl = builder.baseUrl;
@@ -36,6 +38,8 @@ public final class YcClientConfig {
         this.transportType = builder.transportType;
         this.connectTimeout = builder.connectTimeout;
         this.readTimeout = builder.readTimeout;
+        this.proxyHost = builder.proxyHost;
+        this.proxyPort = builder.proxyPort;
     }
 
     public static Builder builder() {
@@ -98,6 +102,16 @@ public final class YcClientConfig {
         return readTimeout;
     }
 
+    /** Optional HTTP proxy host; null/blank means no proxy. */
+    public String proxyHost() {
+        return proxyHost;
+    }
+
+    /** Optional HTTP proxy port; null or <=0 means no proxy. */
+    public Integer proxyPort() {
+        return proxyPort;
+    }
+
     public static final class Builder {
         private String baseUrl = "https://uc.perfect99.com/api";
         private String userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
@@ -113,6 +127,8 @@ public final class YcClientConfig {
         private TransportType transportType = TransportType.OKHTTP;
         private Duration connectTimeout = Duration.ofSeconds(10);
         private Duration readTimeout = Duration.ofSeconds(30);
+        private String proxyHost;
+        private Integer proxyPort;
 
         public Builder baseUrl(String baseUrl) {
             this.baseUrl = Objects.requireNonNull(baseUrl);
@@ -181,6 +197,16 @@ public final class YcClientConfig {
 
         public Builder readTimeout(Duration readTimeout) {
             this.readTimeout = Objects.requireNonNull(readTimeout);
+            return this;
+        }
+
+        public Builder proxyHost(String proxyHost) {
+            this.proxyHost = proxyHost;
+            return this;
+        }
+
+        public Builder proxyPort(Integer proxyPort) {
+            this.proxyPort = proxyPort;
             return this;
         }
 
