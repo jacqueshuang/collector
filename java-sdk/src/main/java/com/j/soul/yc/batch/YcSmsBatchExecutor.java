@@ -37,12 +37,19 @@ public final class YcSmsBatchExecutor implements AutoCloseable {
     private final ExecutorService pool;
     private final boolean ownPool;
     private final int workers;
+    private final int maxBatchSize;
 
-    private YcSmsBatchExecutor(YcClient client, ExecutorService pool, boolean ownPool, int workers) {
+    private YcSmsBatchExecutor(
+            YcClient client,
+            ExecutorService pool,
+            boolean ownPool,
+            int workers,
+            int maxBatchSize) {
         this.client = Objects.requireNonNull(client, "client");
         this.pool = Objects.requireNonNull(pool, "pool");
         this.ownPool = ownPool;
         this.workers = workers;
+        this.maxBatchSize = maxBatchSize;
     }
 
     public static Builder builder() {
@@ -52,6 +59,8 @@ public final class YcSmsBatchExecutor implements AutoCloseable {
     /**
      * Send SMS for all mobiles in parallel (bounded by worker pool + captcha slots).
      * Order of {@link SmsBatchReport#results()} matches input order.
+     *
+     * @throws YcException if non-blank mobile count &gt; {@link #maxBatchSize()}
      */
     public SmsBatchReport sendSms(Collection<String> mobiles) {
         Objects.requireNonNull(mobiles, "mobiles");
@@ -64,6 +73,11 @@ public final class YcSmsBatchExecutor implements AutoCloseable {
         }
         if (list.isEmpty()) {
             return new SmsBatchReport(List.of(), 0L);
+        }
+        if (list.size() > maxBatchSize) {
+            throw new YcException(
+                    com.j.soul.yc.exception.YcStep.SMS,
+                    "batch size " + list.size() + " exceeds maxBatchSize " + maxBatchSize);
         }
 
         List<Callable<SmsTaskResult>> tasks = new ArrayList<>(list.size());
@@ -114,6 +128,11 @@ public final class YcSmsBatchExecutor implements AutoCloseable {
         return workers;
     }
 
+    /** Hard cap on non-blank mobiles per {@link #sendSms(Collection)} call. */
+    public int maxBatchSize() {
+        return maxBatchSize;
+    }
+
     @Override
     public void close() {
         if (ownPool) {
@@ -132,6 +151,7 @@ public final class YcSmsBatchExecutor implements AutoCloseable {
     public static final class Builder {
         private YcClient client;
         private int workers = Math.max(4, Math.min(64, Runtime.getRuntime().availableProcessors() * 4));
+        private int maxBatchSize = 1000;
         private ExecutorService executor;
 
         public Builder client(YcClient client) {
@@ -152,6 +172,18 @@ public final class YcSmsBatchExecutor implements AutoCloseable {
             return this;
         }
 
+        /**
+         * Reject {@link #sendSms(Collection)} immediately when non-blank mobile count exceeds this.
+         * Default {@code 1000}.
+         */
+        public Builder maxBatchSize(int maxBatchSize) {
+            if (maxBatchSize < 1) {
+                throw new IllegalArgumentException("maxBatchSize must be >= 1");
+            }
+            this.maxBatchSize = maxBatchSize;
+            return this;
+        }
+
         /** Optional external pool; caller owns lifecycle if set. */
         public Builder executor(ExecutorService executor) {
             this.executor = Objects.requireNonNull(executor, "executor");
@@ -161,7 +193,7 @@ public final class YcSmsBatchExecutor implements AutoCloseable {
         public YcSmsBatchExecutor build() {
             Objects.requireNonNull(client, "client");
             if (executor != null) {
-                return new YcSmsBatchExecutor(client, executor, false, workers);
+                return new YcSmsBatchExecutor(client, executor, false, workers, maxBatchSize);
             }
             AtomicInteger seq = new AtomicInteger();
             ThreadFactory tf = r -> {
@@ -170,7 +202,7 @@ public final class YcSmsBatchExecutor implements AutoCloseable {
                 return t;
             };
             ExecutorService pool = Executors.newFixedThreadPool(workers, tf);
-            return new YcSmsBatchExecutor(client, pool, true, workers);
+            return new YcSmsBatchExecutor(client, pool, true, workers, maxBatchSize);
         }
     }
 }

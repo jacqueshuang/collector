@@ -4,17 +4,21 @@ import com.j.soul.yc.YcClient;
 import com.j.soul.yc.captcha.CaptchaProvider;
 import com.j.soul.yc.captcha.CaptchaResult;
 import com.j.soul.yc.config.YcClientConfig;
+import com.j.soul.yc.exception.YcException;
+import com.j.soul.yc.exception.YcStep;
 import com.j.soul.yc.http.HttpRequest;
 import com.j.soul.yc.http.HttpResponse;
 import com.j.soul.yc.http.HttpTransport;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class YcSmsBatchExecutorTest {
@@ -127,6 +131,44 @@ class YcSmsBatchExecutorTest {
             assertEquals(2, report.successCount());
             assertEquals(1, report.failureCount());
             assertEquals("13800000002", report.failures().getFirst().mobile());
+        }
+    }
+
+    @Test
+    void batch_rejectsWhenExceedsMaxBatchSize() {
+        CaptchaProvider captcha = () -> new CaptchaResult("p", "1pn9314j", "c", "s");
+        HttpTransport transport = new HttpTransport() {
+            @Override
+            public HttpResponse execute(HttpRequest req) {
+                return json(200, "{\"code\":200,\"msg\":\"ok\",\"data\":null}");
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+
+        List<String> mobiles = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            mobiles.add("1380000000" + i);
+        }
+
+        try (YcClient client = YcClient.builder()
+                .config(YcClientConfig.builder().baseUrl("https://example.test/api").build())
+                .transport(transport)
+                .captchaProvider(captcha)
+                .build();
+             YcSmsBatchExecutor batch = YcSmsBatchExecutor.builder()
+                     .client(client)
+                     .workers(2)
+                     .maxBatchSize(3)
+                     .build()) {
+
+            YcException ex = assertThrows(YcException.class, () -> batch.sendSms(mobiles));
+            assertEquals(YcStep.SMS, ex.getStep());
+            assertTrue(ex.getMessage().contains("maxBatchSize"));
+            assertTrue(ex.getMessage().contains("5"));
+            assertEquals(3, batch.maxBatchSize());
         }
     }
 

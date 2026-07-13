@@ -139,6 +139,7 @@ YcClient client = YcClient.builder()
 try (YcSmsBatchExecutor batch = YcSmsBatchExecutor.builder()
         .client(client)
         .workers(50)                               // keep captcha slots busy
+        .maxBatchSize(500)                         // hard cap: >500 numbers → throw immediately
         .build()) {
     SmsBatchReport report = batch.sendSms(mobileList); // e.g. 1000 numbers
     System.out.println(report.successCount() + "/" + report.total()
@@ -147,6 +148,8 @@ try (YcSmsBatchExecutor batch = YcSmsBatchExecutor.builder()
             System.out.println(f.mobile() + " -> " + f.error() + " / " + f.apiResult()));
 }
 ```
+
+`maxBatchSize` (default **1000**): if non-blank mobile count exceeds it, `sendSms` throws `YcException(SMS, "batch size N exceeds maxBatchSize M")` **before** any captcha/HTTP work.
 
 ### Reach 500 concurrent (recommended)
 
