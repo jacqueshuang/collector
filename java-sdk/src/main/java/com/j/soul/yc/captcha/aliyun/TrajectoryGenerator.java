@@ -2,8 +2,10 @@ package com.j.soul.yc.captcha.aliyun;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.j.soul.yc.config.YcClientConfig;
 import com.j.soul.yc.exception.YcException;
 import com.j.soul.yc.exception.YcStep;
+import com.j.soul.yc.http.HttpTransport;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -11,18 +13,22 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Objects;
 import java.util.zip.Deflater;
 
 /**
- * Builds VerifyCaptchaV3 trajectory {@code data}:
- * TrackList JSON → (optional 32-hex prefix) → zlib deflate → base64 → JSVMP table transform → base64.
+ * Builds VerifyCaptchaV3 trajectory {@code data}.
+ * Primary path: GraalJS full slider solve (fresh per session, no static sample default).
+ * Secondary: synthetic TrackList plaintext helpers for tests / offline inspection.
  */
 public final class TrajectoryGenerator {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final SecureRandom RND = new SecureRandom();
 
-    private final JsVmpTransform transform;
+    private final CaptchaJsRuntime sharedRuntime;
+    private final YcClientConfig config;
+    private final boolean closeRuntime;
     private final int startX;
     private final int startY;
     private final int endX;
@@ -33,17 +39,28 @@ public final class TrajectoryGenerator {
     private final int innerH;
 
     public TrajectoryGenerator() {
-        this(JsVmpTransform.getDefault());
+        this(null, null);
     }
 
-    public TrajectoryGenerator(JsVmpTransform transform) {
-        this(transform, 120, 120, 440, 120, 1728, 1117, 1728, 997);
+    public TrajectoryGenerator(YcClientConfig config) {
+        this(config, null);
     }
 
-    public TrajectoryGenerator(JsVmpTransform transform,
+    public TrajectoryGenerator(CaptchaJsRuntime sharedRuntime) {
+        this(null, sharedRuntime);
+    }
+
+    public TrajectoryGenerator(YcClientConfig config, CaptchaJsRuntime sharedRuntime) {
+        this(config, sharedRuntime, 120, 120, 440, 120, 1728, 1117, 1728, 997);
+    }
+
+    public TrajectoryGenerator(YcClientConfig config,
+                               CaptchaJsRuntime sharedRuntime,
                                int startX, int startY, int endX, int endY,
                                int screenW, int screenH, int innerW, int innerH) {
-        this.transform = transform;
+        this.config = config;
+        this.sharedRuntime = sharedRuntime;
+        this.closeRuntime = sharedRuntime == null;
         this.startX = startX;
         this.startY = startY;
         this.endX = endX;
@@ -59,9 +76,15 @@ public final class TrajectoryGenerator {
             throw new YcException(YcStep.CAPTCHA, "AliyunSession required");
         }
         try {
-            String data = generateSyntheticOrFallback();
-            session.setTrajectoryData(data);
-            return data;
+            CaptchaSolveResult solved = solve(null);
+            session.setTrajectoryData(solved.data());
+            if (session.deviceToken() == null && solved.deviceToken() != null) {
+                session.setDeviceToken(solved.deviceToken());
+            }
+            if (session.securityToken() == null && solved.securityToken() != null) {
+                session.setSecurityToken(solved.securityToken());
+            }
+            return solved.data();
         } catch (YcException e) {
             throw e;
         } catch (Exception e) {
@@ -70,35 +93,26 @@ public final class TrajectoryGenerator {
     }
 
     /**
-     * Prefer fresh synthetic TrackList; if sparse transform table misses keys for the
-     * resulting deflate base64, fall back to offline-captured deflate fully covered by the table.
+     * Full solve returning data + deviceToken (+ optional securityToken).
      */
-    String generateSyntheticOrFallback() {
-        YcException last = null;
-        for (int attempt = 0; attempt < 8; attempt++) {
-            try {
-                String plain = buildPlaintext();
-                String deflateB64 = deflateToBase64(plain.getBytes(StandardCharsets.UTF_8));
-                return Base64.getEncoder().encodeToString(transform.transform(deflateB64));
-            } catch (YcException e) {
-                last = e;
+    public CaptchaSolveResult solve(HttpTransport transport) {
+        CaptchaJsRuntime runtime = null;
+        try {
+            if (sharedRuntime != null) {
+                runtime = sharedRuntime;
+            } else {
+                YcClientConfig cfg = config != null ? config : YcClientConfig.builder().build();
+                runtime = CaptchaJsRuntime.open(cfg, transport);
             }
-        }
-        String sample = loadSampleDeflateB64();
-        if (sample != null && !sample.isBlank()) {
-            return Base64.getEncoder().encodeToString(transform.transform(sample.trim()));
-        }
-        throw last != null ? last : new YcException(YcStep.CAPTCHA, "trajectory generate failed");
-    }
-
-    private static String loadSampleDeflateB64() {
-        try (java.io.InputStream in = TrajectoryGenerator.class.getResourceAsStream("/aliyun/sample_deflate_b64.txt")) {
-            if (in == null) {
-                return null;
-            }
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            return runtime.solveSlider();
+        } catch (YcException e) {
+            throw e;
         } catch (Exception e) {
-            return null;
+            throw new YcException(YcStep.CAPTCHA, "trajectory solve failed: " + e.getMessage(), e);
+        } finally {
+            if (closeRuntime && runtime != null) {
+                runtime.close();
+            }
         }
     }
 
@@ -142,7 +156,6 @@ public final class TrajectoryGenerator {
             mm.append('|').append(p[0]).append(',').append(p[1]).append(',').append(t).append(",0");
         }
         int upRel = lastMoveRel + 10 + RND.nextInt(30);
-        // trailing noise point sometimes present in captures
         mm.append('|').append(endX + 60 + RND.nextInt(20)).append(',')
                 .append(startY + 10 + RND.nextInt(20)).append(',')
                 .append(upRel + 15).append(",1");
@@ -211,11 +224,10 @@ public final class TrajectoryGenerator {
         return sb.toString();
     }
 
-    /** Observed arg is 10-byte blob base64; pure-Java content unknown — random placeholder. */
     private static String randomArg() {
         byte[] b = new byte[10];
         RND.nextBytes(b);
-        b[8] = 0x7c; // '|' often present at index 8 in captures
+        b[8] = 0x7c;
         return Base64.getEncoder().encodeToString(b);
     }
 }

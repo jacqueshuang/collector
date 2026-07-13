@@ -22,6 +22,7 @@ public final class YcClientConfig {
     private final Duration readTimeout;
     private final String proxyHost;
     private final Integer proxyPort;
+    private final String reconDir;
 
     private YcClientConfig(Builder builder) {
         this.baseUrl = builder.baseUrl;
@@ -40,6 +41,7 @@ public final class YcClientConfig {
         this.readTimeout = builder.readTimeout;
         this.proxyHost = builder.proxyHost;
         this.proxyPort = builder.proxyPort;
+        this.reconDir = builder.reconDir;
     }
 
     public static Builder builder() {
@@ -112,6 +114,14 @@ public final class YcClientConfig {
         return proxyPort;
     }
 
+    /**
+     * Directory containing Aliyun/FeiLin SDK assets (feilin094.js, sg029.js, AliyunCaptcha.js).
+     * Null means auto-resolve via {@code YC_RECON_DIR} / relative recon paths.
+     */
+    public String reconDir() {
+        return reconDir;
+    }
+
     public static final class Builder {
         private String baseUrl = "https://uc.perfect99.com/api";
         private String userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
@@ -129,6 +139,7 @@ public final class YcClientConfig {
         private Duration readTimeout = Duration.ofSeconds(30);
         private String proxyHost;
         private Integer proxyPort;
+        private String reconDir;
 
         public Builder baseUrl(String baseUrl) {
             this.baseUrl = Objects.requireNonNull(baseUrl);
@@ -207,6 +218,11 @@ public final class YcClientConfig {
 
         public Builder proxyPort(Integer proxyPort) {
             this.proxyPort = proxyPort;
+            return this;
+        }
+
+        public Builder reconDir(String reconDir) {
+            this.reconDir = reconDir;
             return this;
         }
 

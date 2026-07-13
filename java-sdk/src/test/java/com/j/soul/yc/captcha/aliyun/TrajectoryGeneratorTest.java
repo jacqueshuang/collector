@@ -1,15 +1,18 @@
 package com.j.soul.yc.captcha.aliyun;
 
+import com.j.soul.yc.config.YcClientConfig;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.Base64;
+import java.util.Optional;
 import java.util.zip.Inflater;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TrajectoryGeneratorTest {
 
@@ -41,19 +44,37 @@ class TrajectoryGeneratorTest {
     }
 
     @Test
-    void generate_producesNonEmptyBase64() {
-        AliyunSession session = new AliyunSession("cid", "dc", "1pn9314j", "1uu8u2");
+    void buildPlaintext_hasTrackListShape() {
         TrajectoryGenerator gen = new TrajectoryGenerator();
-        String data = gen.generate(session);
-        assertFalse(data.isBlank());
-        assertTrue(data.matches("^[A-Za-z0-9+/=]+$"));
-        Base64.getDecoder().decode(data);
-        assertEquals(data, session.trajectoryData());
+        String plain = gen.buildPlaintext();
+        assertTrue(plain.length() > 40);
+        assertTrue(plain.contains("\"TrackList\""));
+        assertTrue(plain.contains("\"TrackStartTime\""));
+        // 32-hex prefix
+        assertTrue(plain.substring(0, 32).matches("[0-9a-f]{32}"));
     }
 
     @Test
     void generate_nullSession_throws() {
         assertThrows(com.j.soul.yc.exception.YcException.class,
                 () -> new TrajectoryGenerator().generate(null));
+    }
+
+    @Test
+    void generator_wiresSharedRuntime_whenReconPresent() {
+        Optional<Path> recon = CaptchaJsRuntime.resolveReconDir(
+                Path.of("..", "..", "recon").toAbsolutePath().normalize().toString());
+        if (recon.isEmpty()) {
+            recon = CaptchaJsRuntime.resolveReconDir(null);
+        }
+        if (recon.isEmpty()) {
+            return;
+        }
+        YcClientConfig cfg = YcClientConfig.builder().reconDir(recon.get().toString()).build();
+        try (CaptchaJsRuntime rt = CaptchaJsRuntime.open(cfg)) {
+            TrajectoryGenerator gen = new TrajectoryGenerator(cfg, rt);
+            assertTrue(rt.hasInit());
+            assertFalse(gen.buildPlaintext().isBlank());
+        }
     }
 }
