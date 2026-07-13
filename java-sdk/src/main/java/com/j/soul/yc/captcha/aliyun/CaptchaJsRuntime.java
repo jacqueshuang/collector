@@ -250,9 +250,10 @@ public final class CaptchaJsRuntime implements AutoCloseable {
             if (fn == null || !fn.canExecute()) {
                 throw new YcException(YcStep.CAPTCHA, "__solveCaptcha missing");
             }
-            Value promise = fn.execute(prefix, sceneId);
-            // init sleep 8s + drag sleeps + up to 15s verify wait; allow headroom
-            Value result = awaitValue(promise, Duration.ofSeconds(180));
+            // Starts timer-driven solve; result is published on globalThis.__solveBox
+            // because Promise.then microtasks are not reliable under the host pump.
+            fn.execute(prefix, sceneId);
+            Value result = awaitSolveBox(Duration.ofSeconds(180));
             if (result == null || result.isNull()) {
                 throw new YcException(YcStep.CAPTCHA, "solveSlider returned null");
             }
@@ -267,9 +268,11 @@ public final class CaptchaJsRuntime implements AutoCloseable {
                     verifyResult = vr.asBoolean();
                 }
             }
+            String progress = strMember(result, "progress");
             if (data == null || data.isBlank() || deviceToken == null || deviceToken.isBlank()) {
                 throw new YcException(YcStep.CAPTCHA,
-                        "solveSlider incomplete data/deviceToken certifyId=" + certifyId);
+                        "solveSlider incomplete data/deviceToken certifyId=" + certifyId
+                                + (progress == null || progress.isBlank() ? "" : " progress=" + progress));
             }
             return new CaptchaSolveResult(certifyId, deviceToken, data, securityToken, verifyResult);
         } catch (YcException e) {
@@ -279,6 +282,38 @@ public final class CaptchaJsRuntime implements AutoCloseable {
         }
     }
 
+    private Value awaitSolveBox(Duration timeout) throws Exception {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (System.nanoTime() < deadline) {
+            httpBridge.drainCallbacks();
+            try {
+                context.eval("js",
+                        "if (typeof globalThis.__drainTimers==='function') globalThis.__drainTimers();");
+            } catch (Exception ignored) {
+            }
+            Value box = context.getBindings("js").getMember("__solveBox");
+            if (box != null && box.hasMember("done") && box.getMember("done").asBoolean()) {
+                Value errV = box.getMember("err");
+                if (errV != null && !errV.isNull()) {
+                    throw new YcException(YcStep.CAPTCHA, "solve box error: " + errV);
+                }
+                return box.getMember("val");
+            }
+            Thread.sleep(10);
+        }
+        String progress = "";
+        try {
+            Value p = context.eval("js", "(globalThis.__progress||[]).join(' | ')");
+            if (p != null && p.isString()) {
+                progress = p.asString();
+            }
+        } catch (Exception ignored) {
+        }
+        throw new YcException(YcStep.CAPTCHA,
+                "solveSlider timeout after " + timeout
+                        + (progress.isBlank() ? "" : " progress=" + progress));
+    }
+
     /**
      * Hybrid helper: when SDK exposes a global transform callable via prior solve hooks, use it.
      * Currently uses full solve path for trajectory ciphertext freshness.
@@ -286,6 +321,10 @@ public final class CaptchaJsRuntime implements AutoCloseable {
     public String generateTrajectoryData() {
         return solveSlider().data();
     }
+
+    /** Package/test diag only. */
+    org.graalvm.polyglot.Context contextForDiag() { return context; }
+    JsHttpBridge httpBridgeForDiag() { return httpBridge; }
 
     public boolean hasInit() {
         ensureOpen();
