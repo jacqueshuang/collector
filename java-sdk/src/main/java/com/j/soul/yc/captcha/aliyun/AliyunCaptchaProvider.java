@@ -12,8 +12,9 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Orchestrates Aliyun captcha via in-process GraalJS ({@link CaptchaJsRuntime#solveSlider()}).
- * One shared runtime + transport per provider instance (Init → drag → Verify inside JS).
+ * Orchestrates Aliyun captcha. Default engine is HtmlUnit full DOM
+ * ({@link CaptchaHtmlUnitRuntime}); set {@code captchaEngine=graal} for
+ * in-process GraalJS ({@link CaptchaJsRuntime}).
  */
 public final class AliyunCaptchaProvider implements CaptchaProvider, AutoCloseable {
 
@@ -23,7 +24,9 @@ public final class AliyunCaptchaProvider implements CaptchaProvider, AutoCloseab
     private final boolean ownTransport;
     private final Object lock = new Object();
     private final AtomicBoolean closed = new AtomicBoolean(false);
-    private CaptchaJsRuntime runtime;
+
+    private CaptchaHtmlUnitRuntime htmlUnitRuntime;
+    private CaptchaJsRuntime graalRuntime;
     private boolean ownRuntime;
 
     public AliyunCaptchaProvider(YcClientConfig config, HttpTransport transport) {
@@ -38,10 +41,17 @@ public final class AliyunCaptchaProvider implements CaptchaProvider, AutoCloseab
         }
     }
 
-    /** Package-visible for tests: inject shared runtime (caller owns lifecycle). */
+    /** Package-visible for tests: inject shared Graal runtime (caller owns lifecycle). */
     AliyunCaptchaProvider(YcClientConfig config, HttpTransport transport, CaptchaJsRuntime sharedRuntime) {
         this(config, transport);
-        this.runtime = sharedRuntime;
+        this.graalRuntime = sharedRuntime;
+        this.ownRuntime = false;
+    }
+
+    /** Package-visible for tests: inject shared HtmlUnit runtime (caller owns lifecycle). */
+    AliyunCaptchaProvider(YcClientConfig config, HttpTransport transport, CaptchaHtmlUnitRuntime sharedRuntime) {
+        this(config, transport);
+        this.htmlUnitRuntime = sharedRuntime;
         this.ownRuntime = false;
     }
 
@@ -49,7 +59,7 @@ public final class AliyunCaptchaProvider implements CaptchaProvider, AutoCloseab
         return captchaConfig;
     }
 
-    /** Shared transport used by this provider / runtime HTTP bridge. */
+    /** Shared transport used by this provider / Graal HTTP bridge. */
     public HttpTransport transport() {
         return transport;
     }
@@ -60,7 +70,11 @@ public final class AliyunCaptchaProvider implements CaptchaProvider, AutoCloseab
         try {
             CaptchaSolveResult solved;
             synchronized (lock) {
-                solved = ensureRuntime().solveSlider();
+                if (useGraal()) {
+                    solved = ensureGraalRuntime().solveSlider();
+                } else {
+                    solved = ensureHtmlUnitRuntime().solveSlider();
+                }
             }
             return mapSolveResult(solved, captchaConfig.sceneId());
         } catch (YcException e) {
@@ -95,12 +109,29 @@ public final class AliyunCaptchaProvider implements CaptchaProvider, AutoCloseab
         return new CaptchaResult(param, sceneId, certifyId, securityToken);
     }
 
-    private CaptchaJsRuntime ensureRuntime() {
-        if (runtime == null) {
-            runtime = CaptchaJsRuntime.open(config, transport);
+    private boolean useGraal() {
+        // Injected Graal runtime forces graal path even if config default is htmlunit.
+        if (graalRuntime != null && htmlUnitRuntime == null) {
+            return true;
+        }
+        String engine = config.captchaEngine();
+        return engine != null && "graal".equalsIgnoreCase(engine.trim());
+    }
+
+    private CaptchaHtmlUnitRuntime ensureHtmlUnitRuntime() {
+        if (htmlUnitRuntime == null) {
+            htmlUnitRuntime = CaptchaHtmlUnitRuntime.open(config, transport);
             ownRuntime = true;
         }
-        return runtime;
+        return htmlUnitRuntime;
+    }
+
+    private CaptchaJsRuntime ensureGraalRuntime() {
+        if (graalRuntime == null) {
+            graalRuntime = CaptchaJsRuntime.open(config, transport);
+            ownRuntime = true;
+        }
+        return graalRuntime;
     }
 
     private void ensureOpen() {
@@ -115,13 +146,22 @@ public final class AliyunCaptchaProvider implements CaptchaProvider, AutoCloseab
             return;
         }
         synchronized (lock) {
-            if (ownRuntime && runtime != null) {
-                try {
-                    runtime.close();
-                } catch (Exception ignored) {
+            if (ownRuntime) {
+                if (htmlUnitRuntime != null) {
+                    try {
+                        htmlUnitRuntime.close();
+                    } catch (Exception ignored) {
+                    }
+                }
+                if (graalRuntime != null) {
+                    try {
+                        graalRuntime.close();
+                    } catch (Exception ignored) {
+                    }
                 }
             }
-            runtime = null;
+            htmlUnitRuntime = null;
+            graalRuntime = null;
             ownRuntime = false;
         }
         if (ownTransport) {

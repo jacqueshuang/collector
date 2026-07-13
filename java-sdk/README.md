@@ -7,7 +7,7 @@ No Spring dependency; Spring Boot apps construct a manual `@Bean`.
 |---|---|
 | Coordinate | `com.j.soul.yc:yc:0.1.0` |
 | Java | 23+ (`maven.compiler.release=23`) |
-| Captcha runtime | In-process **GraalJS** + recon scripts (no Node binary) |
+| Captcha runtime | **HtmlUnit** full DOM (default) + recon scripts; optional GraalJS (no Node) |
 
 ## Dependency
 
@@ -32,7 +32,8 @@ cd java-sdk && mvn -q clean test install
 YcClient ycClient(@Value("${yc.recon-dir}") String reconDir) {
     return YcClient.builder()
             .config(YcClientConfig.builder()
-                    .reconDir(reconDir)                 // required for captcha GraalJS scripts
+                    .reconDir(reconDir)                 // required for local Aliyun/FeiLin SDK scripts
+                    .captchaEngine("htmlunit")          // default; or "graal"
                     .transportType(TransportType.OKHTTP) // or TransportType.CURL4J
                     .build())
             .build();
@@ -73,9 +74,11 @@ Public API: `checkMobileAvailable` · `getCaptchaVerifyParam` · `getSmsCode` ·
 | `readTimeout` | 30s | |
 | `proxyHost` / `proxyPort` | empty | optional HTTP proxy |
 | `reconDir` | null → auto | Aliyun/FeiLin SDK scripts dir (**required for captcha**) |
+| `captchaEngine` | `htmlunit` | `htmlunit` (full DOM) \| `graal` (minimal bootstrap) |
 
 `reconDir` must contain `feilin094.js` (also expects `sg029.js`, `AliyunCaptcha.js`).  
-Resolution order when unset: `YC_RECON_DIR` → relative `../recon`, `../../recon`, `recon`.
+Resolution order when unset: `YC_RECON_DIR` → relative `../recon`, `../../recon`, `recon`.  
+HtmlUnit may also load remote dynamic SG scripts over the network; local recon is still the primary SDK source.
 
 There is **no** `aliyunKeyId` / `aliyunKeySecret` on config — captcha is client-side FeiLin/Aliyun JS, not OpenAPI keys.
 
@@ -91,11 +94,24 @@ YcClientConfig.builder().transportType(TransportType.CURL4J).build();  // system
 
 Custom transport: `YcClient.builder().transport(myHttpTransport)`.
 
-## Captcha / GraalJS
+## Captcha / HtmlUnit (default)
 
-Captcha is **not** pure table-crypto alone. `AliyunCaptchaProvider` drives in-process GraalJS (`CaptchaJsRuntime`) loading recon scripts (`feilin094.js`, `sg029.js`, `AliyunCaptcha.js`) with a Java-backed XHR bridge. No Node process at runtime.
+Captcha is **not** pure table-crypto alone. Default path: `AliyunCaptchaProvider` → `CaptchaHtmlUnitRuntime` (HtmlUnit Chrome-emulated full DOM):
 
-Graal notes:
+1. Load the **real** page `https://uc.perfect99.com/loginAndRegistration` (blank data-HTML does not pump timers reliably in HtmlUnit)
+2. Ensure host node `#nc`, eval recon `AliyunCaptcha.js` (FeiLin + dynamic SG load from CDN after Init)
+3. `initAliyunCaptcha({mode:'embed', element:'#nc', ...})`
+4. Wait for slider `#aliyunCaptcha-sliding-slider`, simulate mouse drag
+5. Capture Verify request/response fields (`data` / `deviceToken` / `certifyId` / `securityToken`)
+
+No Node process at runtime. Optional engine switch:
+
+```java
+YcClientConfig.builder().captchaEngine("htmlunit").build(); // default full DOM
+YcClientConfig.builder().captchaEngine("graal").build();    // legacy minimal DOM + GraalJS
+```
+
+Graal notes (only when `captchaEngine=graal`):
 
 - Context sets `engine.WarnInterpreterOnly=false` (avoids interpreter-only spam on stock JDK).
 - On newer JDKs, native access warnings for Polyglot/Truffle may still appear; if needed:
@@ -122,7 +138,7 @@ java --enable-native-access=ALL-UNNAMED -jar app.jar
 | `Perfect99Client` | `YcClient` |
 | `crypto.cryto_login` | `CrytoLogin` |
 | `gw_sign.gw_sign` | `GwSigner` |
-| `AliyunCaptchaV3` / Node `feilin_helper*` | `AliyunCaptchaProvider` + GraalJS (`CaptchaJsRuntime`) |
+| `AliyunCaptchaV3` / Node `feilin_helper*` | `AliyunCaptchaProvider` + HtmlUnit (`CaptchaHtmlUnitRuntime`, default) / Graal (`CaptchaJsRuntime`) |
 | `curl_cffi` session | `HttpTransport` (`OkHttpTransport` / `Curl4jTransport`) |
 | `server.py` FastAPI | not ported (callers embed SDK) |
 

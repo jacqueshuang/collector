@@ -23,6 +23,8 @@ public final class YcClientConfig {
     private final String proxyHost;
     private final Integer proxyPort;
     private final String reconDir;
+    /** Captcha host engine: {@code htmlunit} (default) or {@code graal}. */
+    private final String captchaEngine;
 
     private YcClientConfig(Builder builder) {
         this.baseUrl = builder.baseUrl;
@@ -42,6 +44,7 @@ public final class YcClientConfig {
         this.proxyHost = builder.proxyHost;
         this.proxyPort = builder.proxyPort;
         this.reconDir = builder.reconDir;
+        this.captchaEngine = builder.captchaEngine;
     }
 
     public static Builder builder() {
@@ -122,6 +125,14 @@ public final class YcClientConfig {
         return reconDir;
     }
 
+    /**
+     * Captcha DOM engine: {@code htmlunit} (full JVM browser DOM, default) or {@code graal}
+     * (minimal custom DOM bootstrap).
+     */
+    public String captchaEngine() {
+        return captchaEngine;
+    }
+
     public static final class Builder {
         private String baseUrl = "https://uc.perfect99.com/api";
         private String userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
@@ -140,6 +151,7 @@ public final class YcClientConfig {
         private String proxyHost;
         private Integer proxyPort;
         private String reconDir;
+        private String captchaEngine = "htmlunit";
 
         public Builder baseUrl(String baseUrl) {
             this.baseUrl = Objects.requireNonNull(baseUrl);
@@ -223,6 +235,14 @@ public final class YcClientConfig {
 
         public Builder reconDir(String reconDir) {
             this.reconDir = reconDir;
+            return this;
+        }
+
+        /** {@code htmlunit} (default) or {@code graal}. */
+        public Builder captchaEngine(String captchaEngine) {
+            this.captchaEngine = captchaEngine == null || captchaEngine.isBlank()
+                    ? "htmlunit"
+                    : captchaEngine.trim().toLowerCase();
             return this;
         }
 

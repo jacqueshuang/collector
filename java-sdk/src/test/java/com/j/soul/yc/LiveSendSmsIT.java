@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * Env-gated live acceptance. Default {@code mvn test} skips these (no flags).
  *
  * <ul>
- *   <li>{@code YC_LIVE_CAPTCHA=1} — live GraalJS captcha (needs recon dir)</li>
+ *   <li>{@code YC_LIVE_CAPTCHA=1} — live HtmlUnit captcha (needs recon dir)</li>
  *   <li>{@code YC_LIVE_SMS=1} + {@code YC_TEST_MOBILE} — full sendSms path</li>
  *   <li>{@code YC_RECON_DIR} optional; else auto-resolve {@code ../recon}</li>
  * </ul>

@@ -14,5 +14,6 @@ class YcClientConfigTest {
         assertEquals("8294e640299aae744184b3a529cd1e2f", c.gwKey());
         assertEquals(TransportType.OKHTTP, c.transportType());
         assertEquals("1pn9314j", c.sceneId());
+        assertEquals("htmlunit", c.captchaEngine());
     }
 }
