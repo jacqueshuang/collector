@@ -151,7 +151,32 @@ public class SmsController {
 client.getSmsCode(mobile, captchaVerifyParam, SmsPathType.LOGIN);
 ```
 
-其他单接口：`checkMobileAvailable` · `getCaptchaVerifyParam` · `getSmsCode` · `replaceMobile`。
+其他单接口：`checkMobileAvailable` · `getCaptchaVerifyParam` · `getSmsCode` · `replaceMobile` · `loginBySms`。
+
+### 登录页：发码 + 提交验证码
+
+```java
+// 1) 发登录短信 pathType=5
+ApiResult sms = ycClient.sendLoginSms(mobile);
+// 2) 从短信通道拿到 6 位码后提交
+ApiResult login = ycClient.loginBySms(mobile, smsCode);
+// login.getCode()==200 时 data 通常含 access_token 等字段；SDK 不落 cookie
+```
+
+Spring 控制器示例（可选片段，可紧接 send-login）：
+
+```java
+/** 登录页提交短信验证码 */
+@PostMapping("/login-sms")
+public Map<String, Object> loginSms(@RequestBody Map<String, String> body) {
+    var r = ycClient.loginBySms(body.get("mobile"), body.get("smsCode"));
+    return Map.of(
+            "code", r.getCode(),
+            "msg", r.getMsg() == null ? "" : r.getMsg(),
+            "data", r.getData() == null ? "" : r.getData()
+    );
+}
+```
 
 ### 批量发送（多号码并行）
 

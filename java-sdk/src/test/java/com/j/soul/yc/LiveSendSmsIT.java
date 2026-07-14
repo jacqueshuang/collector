@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * <ul>
  *   <li>{@code YC_LIVE_CAPTCHA=1} — live HtmlUnit captcha (needs recon dir)</li>
  *   <li>{@code YC_LIVE_SMS=1} + {@code YC_TEST_MOBILE} — full sendSms path</li>
+ *   <li>{@code YC_LIVE_LOGIN=1} + {@code YC_TEST_MOBILE} + {@code YC_SMS_CODE} — loginBySms</li>
  *   <li>{@code YC_RECON_DIR} optional; else auto-resolve {@code ../recon}</li>
  * </ul>
  */
@@ -88,6 +89,30 @@ class LiveSendSmsIT {
             assertNotNull(r, "ApiResult must parse");
             assertNotNull(r.getCode(), "business code present");
             System.out.println("live sendLoginSms mobile=" + mobile.trim()
+                    + " code=" + r.getCode()
+                    + " msg=" + r.getMsg()
+                    + " data=" + r.getData());
+        }
+    }
+
+    /**
+     * SMS login submit. Enable with {@code YC_LIVE_LOGIN=1} and provide
+     * {@code YC_TEST_MOBILE} + {@code YC_SMS_CODE}.
+     */
+    @Test
+    @EnabledIfEnvironmentVariable(named = "YC_LIVE_LOGIN", matches = "1")
+    void live_loginBySms() {
+        String mobile = System.getenv("YC_TEST_MOBILE");
+        String code = System.getenv("YC_SMS_CODE");
+        assumeTrue(mobile != null && !mobile.isBlank(), "set YC_TEST_MOBILE");
+        assumeTrue(code != null && !code.isBlank(), "set YC_SMS_CODE");
+        Path recon = requireRecon();
+        YcClientConfig cfg = YcClientConfig.builder().reconDir(recon.toString()).build();
+        try (YcClient client = YcClient.builder().config(cfg).build()) {
+            ApiResult r = client.loginBySms(mobile.trim(), code.trim());
+            assertNotNull(r, "ApiResult must parse");
+            assertNotNull(r.getCode(), "business code present");
+            System.out.println("live loginBySms mobile=" + mobile.trim()
                     + " code=" + r.getCode()
                     + " msg=" + r.getMsg()
                     + " data=" + r.getData());
