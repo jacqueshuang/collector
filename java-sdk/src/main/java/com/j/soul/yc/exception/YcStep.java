@@ -5,6 +5,7 @@ public enum YcStep {
     CAPTCHA,
     SMS,
     REPLACE,
+    LOGIN,
     HTTP,
     CRYPTO,
     SIGN

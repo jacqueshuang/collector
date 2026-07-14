@@ -30,6 +30,10 @@ public final class YcClient implements AutoCloseable {
     private static final String PATH_CHECK_MOBILE = "/mobile/loginregister/checkMemberMobileAvailable";
     private static final String PATH_GET_SMS = "/mobile/login/getSmsCodeNewV2";
     private static final String PATH_REPLACE_MOBILE = "/mobile/openApi/replaceMobile";
+    private static final String PATH_LOGIN = "/login";
+    /** Frontend OAuth client Basic for portal login (portal_app:perfect_portal). */
+    private static final String PORTAL_BASIC_AUTH =
+            "Basic cG9ydGFsX2FwcDpwZXJmZWN0X3BvcnRhbA==";
     /** Referer used by login-page SMS (isShow=login). */
     private static final String LOGIN_REFERER =
             "https://uc.perfect99.com/loginAndRegistration?isShow=login";
@@ -149,6 +153,53 @@ public final class YcClient implements AutoCloseable {
         Objects.requireNonNull(mobile, "mobile");
         CaptchaResult captcha = getCaptchaVerifyParam();
         return getSmsCode(mobile, captcha.captchaVerifyParam(), SmsPathType.LOGIN);
+    }
+
+    /**
+     * Login-page SMS submit: POST {@code /login} with crytoLogin body.
+     * Payload: username=mobile, password=smsCode, auth_type=sms, grant_type=password.
+     * Authorization is raw Basic (no Bearer). GW sign uses the Basic value as accessToken
+     * (frontend {@code ce()} treats Authorization length &gt; 7 the same way).
+     */
+    public ApiResult loginBySms(String mobile, String smsCode) {
+        ensureOpen();
+        Objects.requireNonNull(mobile, "mobile");
+        Objects.requireNonNull(smsCode, "smsCode");
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>(4);
+            payload.put("username", mobile);
+            payload.put("password", smsCode);
+            payload.put("auth_type", "sms");
+            payload.put("grant_type", "password");
+
+            Map<String, String> encrypted = CrytoLogin.encrypt(payload, config.rsaPublicKeyBase64());
+            byte[] body = formEncode(encrypted).getBytes(StandardCharsets.UTF_8);
+
+            Map<String, String> headers = new LinkedHashMap<>();
+            headers.put("User-Agent", config.userAgent());
+            headers.put("Origin", config.origin());
+            headers.put("Referer", LOGIN_REFERER);
+            headers.put("channel", config.channel());
+            headers.put("client", config.client());
+            headers.put("Content-Type", FORM_CONTENT_TYPE);
+            headers.put("Authorization", PORTAL_BASIC_AUTH);
+            headers.putAll(GwSigner.sign(
+                    PATH_LOGIN,
+                    "POST",
+                    config.gwKey(),
+                    config.gwClient(),
+                    PORTAL_BASIC_AUTH,
+                    null,
+                    null));
+
+            String url = joinUrl(config.baseUrl(), PATH_LOGIN);
+            HttpResponse resp = transport.execute(new HttpRequest("POST", url, headers, body, FORM_CONTENT_TYPE));
+            return parseApiResult(resp, YcStep.LOGIN);
+        } catch (YcException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new YcException(YcStep.LOGIN, "loginBySms failed: " + e.getMessage(), e);
+        }
     }
 
     public ApiResult replaceMobile(ReplaceMobileRequest req) {

@@ -195,6 +195,79 @@ class YcClientTest {
         assertNotNull(req.headers().get("GW-Client"));
     }
 
+    @Test
+    void loginBySms_postsEncryptedFormWithBasicAuth() {
+        RecordingTransport transport = new RecordingTransport(req ->
+                json(200, "{\"code\":200,\"msg\":\"login-ok\",\"data\":{\"access_token\":\"tok\"}}"));
+
+        try (YcClient client = YcClient.builder()
+                .config(YcClientConfig.builder().baseUrl("https://example.test/api").build())
+                .transport(transport)
+                .captchaProvider(() -> new CaptchaResult("x", "s", "c", "t"))
+                .build()) {
+            ApiResult r = client.loginBySms("13900003333", "654321");
+            assertEquals(200, r.getCode());
+            assertEquals("login-ok", r.getMsg());
+            assertNotNull(r.getData());
+        }
+
+        assertEquals(1, transport.requests.size());
+        HttpRequest post = transport.requests.getFirst();
+        assertEquals("POST", post.method());
+        assertTrue(post.url().endsWith("/login"), post.url());
+        assertEquals(
+                "Basic cG9ydGFsX2FwcDpwZXJmZWN0X3BvcnRhbA==",
+                post.headers().get("Authorization"));
+        assertFalse(post.headers().get("Authorization").startsWith("Bearer"));
+        assertTrue(post.headers().get("Referer").contains("isShow=login"));
+        assertHasBusinessHeaders(post.headers());
+        assertNotNull(post.headers().get("GW-Timestamp"));
+        assertNotNull(post.headers().get("GW-Nonce"));
+        assertNotNull(post.headers().get("GW-Client"));
+        assertTrue(post.headers().get("Content-Type").startsWith("application/x-www-form-urlencoded"));
+        String body = new String(post.body(), StandardCharsets.UTF_8);
+        assertTrue(body.contains("key="));
+        assertTrue(body.contains("data="));
+        assertFalse(body.contains("username="));
+        assertFalse(body.contains("password="));
+        assertFalse(body.contains("auth_type="));
+    }
+
+    @Test
+    void loginBySms_businessReject_returnsApiResult() {
+        RecordingTransport transport = new RecordingTransport(req ->
+                json(200, "{\"code\":401,\"msg\":\"bad code\",\"data\":null}"));
+
+        try (YcClient client = YcClient.builder()
+                .config(YcClientConfig.builder().baseUrl("https://example.test/api").build())
+                .transport(transport)
+                .captchaProvider(() -> new CaptchaResult("x", "s", "c", "t"))
+                .build()) {
+            ApiResult r = client.loginBySms("13900003333", "000000");
+            assertEquals(401, r.getCode());
+            assertEquals("bad code", r.getMsg());
+        }
+    }
+
+    @Test
+    void loginBySms_transportFailure_usesLoginStep() {
+        RecordingTransport transport = new RecordingTransport(req -> {
+            throw new RuntimeException("boom");
+        });
+
+        try (YcClient client = YcClient.builder()
+                .config(YcClientConfig.builder().baseUrl("https://example.test/api").build())
+                .transport(transport)
+                .captchaProvider(() -> new CaptchaResult("x", "s", "c", "t"))
+                .build()) {
+            com.j.soul.yc.exception.YcException ex =
+                    org.junit.jupiter.api.Assertions.assertThrows(
+                            com.j.soul.yc.exception.YcException.class,
+                            () -> client.loginBySms("13900003333", "654321"));
+            assertEquals(com.j.soul.yc.exception.YcStep.LOGIN, ex.getStep());
+        }
+    }
+
     private static void assertHasBusinessHeaders(Map<String, String> headers) {
         assertEquals("pc", headers.get("channel"));
         assertEquals("mall", headers.get("client"));
