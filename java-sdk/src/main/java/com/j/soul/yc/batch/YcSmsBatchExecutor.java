@@ -18,17 +18,15 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * High-throughput batch SMS sender on top of a shared {@link YcClient}.
+ * 基于共享 {@link YcClient} 的批量短信发送器。
  * <p>
- * Parallelism is bounded by {@code workers} (this class) and by
- * {@code captchaConcurrency} inside the client's captcha provider.
- * For true multi-hundred concurrency, raise both and/or run multiple JVM instances.
+ * 并发受本类 {@code workers} 与客户端 {@code captchaConcurrency} 双重限制。
+ * 真·数百路并发建议提高两者，或拆多机/多进程。
  * <p>
- * Typical 500-way setup:
+ * 500 路参考：
  * <ul>
- *   <li>Single beefy host: {@code captchaConcurrency=500}, {@code workers=500}
- *       (needs tens of GB RAM; often impractical)</li>
- *   <li>Cluster: 10 instances × {@code captchaConcurrency=50} = 500 concurrent solves</li>
+ *   <li>单机：{@code captchaConcurrency=500} + {@code workers=500}（内存需求大，通常不现实）</li>
+ *   <li>集群：10 实例 × {@code captchaConcurrency=50} = 500 路滑块</li>
  * </ul>
  */
 public final class YcSmsBatchExecutor implements AutoCloseable {
@@ -52,24 +50,30 @@ public final class YcSmsBatchExecutor implements AutoCloseable {
         this.maxBatchSize = maxBatchSize;
     }
 
+    /** 创建批量发送器构建器。 */
     public static Builder builder() {
         return new Builder();
     }
 
     /**
-     * Reset-phone SMS batch ({@code pathType=11}, with check-mobile).
-     * Order of {@link SmsBatchReport#results()} matches input order.
+     * 批量发送「重置手机号」短信（pathType=11，含检查手机号）。
+     * <p>
+     * {@link SmsBatchReport#results()} 顺序与输入非空号码顺序一致。
      *
-     * @throws YcException if non-blank mobile count &gt; {@link #maxBatchSize()}
+     * @param mobiles 手机号集合；null/空白会被跳过
+     * @return 批量报告
+     * @throws YcException 非空号码数 &gt; {@link #maxBatchSize()} 时立即失败（不做 captcha/HTTP）
      */
     public SmsBatchReport sendSms(Collection<String> mobiles) {
         return sendAll(mobiles, false);
     }
 
     /**
-     * Login-page SMS batch ({@code pathType=5}, no check-mobile).
+     * 批量发送「登录页」短信（pathType=5，不检查手机号）。
      *
-     * @throws YcException if non-blank mobile count &gt; {@link #maxBatchSize()}
+     * @param mobiles 手机号集合；null/空白会被跳过
+     * @return 批量报告
+     * @throws YcException 非空号码数 &gt; {@link #maxBatchSize()} 时立即失败
      */
     public SmsBatchReport sendLoginSms(Collection<String> mobiles) {
         return sendAll(mobiles, true);
@@ -137,15 +141,17 @@ public final class YcSmsBatchExecutor implements AutoCloseable {
         }
     }
 
+    /** 工作线程数。 */
     public int workers() {
         return workers;
     }
 
-    /** Hard cap on non-blank mobiles per {@link #sendSms(Collection)} call. */
+    /** 单次批量允许的非空手机号上限。 */
     public int maxBatchSize() {
         return maxBatchSize;
     }
 
+    /** 关闭自有线程池（注入外部 executor 时不关闭）。 */
     @Override
     public void close() {
         if (ownPool) {

@@ -1,16 +1,16 @@
 package com.j.soul.yc.model;
 
 /**
- * {@code pathType} for {@code /mobile/login/getSmsCodeNewV2}.
+ * 发短信接口 {@code /mobile/login/getSmsCodeNewV2} 的 {@code pathType}。
  * <ul>
- *   <li>{@link #RESET_PHONE} (11) — reset phone / member card flow ({@code isShow=resetPhone})</li>
- *   <li>{@link #LOGIN} (5) — login / password-related SMS on login page ({@code isShow=login})</li>
+ *   <li>{@link #RESET_PHONE} (11) — 重置手机号 / 会员卡流程（{@code isShow=resetPhone}）</li>
+ *   <li>{@link #LOGIN} (5) — 登录页短信验证码（{@code isShow=login}）</li>
  * </ul>
  */
 public enum SmsPathType {
-    /** Reset mobile number SMS (current default product flow). */
+    /** 重置手机号短信（默认产品流）。 */
     RESET_PHONE(11),
-    /** Login page SMS verification code. */
+    /** 登录页短信验证码。 */
     LOGIN(5);
 
     private final int value;

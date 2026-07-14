@@ -1,13 +1,13 @@
-# yc — Perfect99 pure-Java SDK
+# yc — Perfect99 纯 Java SDK
 
-Maven library for perfect99: check-mobile · Aliyun captcha · SMS · SMS login · replace-mobile · batch SMS.  
-No Spring dependency; Spring Boot apps construct a manual `@Bean`.
+面向 perfect99 业务的 Maven 库：检查手机号 · 阿里云滑块 · 发短信 · 短信登录 · 换绑手机号 · 批量发码。  
+**无 Spring 依赖**；Spring Boot 项目手动注册 `@Bean` 即可。
 
 | | |
 |---|---|
-| Coordinate | `com.j.soul.yc:yc:0.1.0` |
-| Java | 23+ (`maven.compiler.release=23`) |
-| Captcha runtime | **HtmlUnit** full DOM (default) + recon scripts; optional GraalJS (no Node) |
+| 坐标 | `com.j.soul.yc:yc:0.1.0` |
+| Java | 23+（`maven.compiler.release=23`） |
+| 滑块运行时 | 默认 **HtmlUnit** 全 DOM + recon 脚本；可选 GraalJS（无 Node） |
 
 ## Dependency
 
@@ -29,150 +29,207 @@ cd java-sdk && mvn -q clean test install
 
 ### `YcClient`（主入口）
 
-| 方法 | 上游路径 | 说明 |
-|------|----------|------|
-| `checkMobileAvailable(mobile)` | `GET /mobile/loginregister/checkMemberMobileAvailable` | 检查会员手机号是否可用 |
-| `getCaptchaVerifyParam()` | 阿里云滑块（本地 HtmlUnit/Graal） | 生成 `captchaVerifyParam` |
-| `getSmsCode(mobile, captchaVerifyParam)` | `POST /mobile/login/getSmsCodeNewV2` | 发短信，默认 `pathType=11`（重置） |
-| `getSmsCode(mobile, captchaVerifyParam, pathType)` | 同上 | 显式 `SmsPathType` |
-| `sendSms(mobile)` | check → captcha → getSmsCode(11) | 重置手机号完整发码 |
-| `sendLoginSms(mobile)` | captcha → getSmsCode(5) | 登录页完整发码（**不** check） |
-| `loginBySms(mobile, smsCode)` | `POST /login` | 登录页提交短信码（`auth_type=sms`） |
-| `replaceMobile(ReplaceMobileRequest)` | `POST /mobile/openApi/replaceMobile` | 换绑手机号 |
-| `close()` | — | 关闭自有 transport / captcha |
-| `builder()` | — | 构造 `YcClientBuilder` |
+业务单接口与组合流程都从这里调用。构造后建议单例复用。
+
+| 方法 | 中文说明 | 上游路径 |
+|------|----------|----------|
+| `checkMobileAvailable(mobile)` | **检查会员手机号是否可用**（重置流程前置） | `GET .../checkMemberMobileAvailable` |
+| `getCaptchaVerifyParam()` | **过阿里云滑块**，拿到发短信用的 captcha 参数 | 本地 HtmlUnit/Graal |
+| `getSmsCode(mobile, captcha)` | **只发短信**（默认重置场景 pathType=11；需自备 captcha） | `POST .../getSmsCodeNewV2` |
+| `getSmsCode(mobile, captcha, pathType)` | **只发短信**并指定场景（11 重置 / 5 登录） | 同上 |
+| `sendSms(mobile)` | **重置手机号一键发码**：检查 → 滑块 → 发短信(11) | 组合流程 |
+| `sendLoginSms(mobile)` | **登录页一键发码**：滑块 → 发短信(5)，不检查手机号 | 组合流程 |
+| `loginBySms(mobile, smsCode)` | **登录页提交短信验证码**完成短信登录 | `POST /login` |
+| `replaceMobile(req)` | **换绑手机号**（卡号+证件+短信码） | `POST .../replaceMobile` |
+| `close()` | 关闭本客户端自建的 HTTP / captcha 资源 | — |
+| `builder()` | 创建构建器 | — |
 
 ### `YcSmsBatchExecutor`（批量发码）
 
-| 方法 | 等价单发 | 说明 |
-|------|----------|------|
-| `sendSms(Collection<String>)` | `YcClient#sendSms` | 重置手机号批量（pathType=11） |
-| `sendLoginSms(Collection<String>)` | `YcClient#sendLoginSms` | 登录页批量（pathType=5） |
-| `workers()` / `maxBatchSize()` | — | 当前配置 |
-| `close()` | — | 关闭自有线程池 |
-| `builder()` | — | `.client` / `.workers` / `.maxBatchSize` / `.executor` |
+在共享 `YcClient` 上并行发码；**不负责登录提交**（登录码来自外部短信通道）。
+
+| 方法 | 中文说明 | 等价单发 |
+|------|----------|----------|
+| `sendSms(mobiles)` | 批量重置手机号发码（含 check） | `YcClient#sendSms` |
+| `sendLoginSms(mobiles)` | 批量登录页发码（不含 check） | `YcClient#sendLoginSms` |
+| `workers()` | 查看工作线程数 | — |
+| `maxBatchSize()` | 查看单次批量号码上限 | — |
+| `close()` | 关闭自有线程池 | — |
+| `builder()` | 构建器：`.client` / `.workers` / `.maxBatchSize` / `.executor` | — |
 
 ### 模型 / 异常 / 枚举
 
-| 类型 | 用途 |
-|------|------|
-| `ApiResult` | 业务 JSON：`code` / `msg`（兼容 `message`）/ `data` |
-| `CaptchaResult` | `captchaVerifyParam`, `sceneId`, `certifyId`, `securityToken` |
-| `ReplaceMobileRequest` | `cardNo`, `mobile`, `certNo`, `smsCode`, `accessToken` |
-| `SmsPathType` | `RESET_PHONE(11)` · `LOGIN(5)` |
-| `SmsBatchReport` | `results`, `total`, `successCount`, `failureCount`, `elapsedMs`, `failures` |
-| `SmsTaskResult` | 单号结果：`mobile`, `success`, `apiResult`, `error`, `elapsedMs` |
-| `YcException` | 基础设施失败；`getStep()` → `YcStep` |
-| `YcStep` | `CHECK_MOBILE` · `CAPTCHA` · `SMS` · `REPLACE` · `LOGIN` · `HTTP` · `CRYPTO` · `SIGN` |
-| `TransportType` | `OKHTTP`（默认）· `CURL4J` |
-| `YcClientConfig` | 全部运行时配置（见下文表） |
-| `YcClientBuilder` | `.config` / `.transport` / `.captchaProvider` / `.build` |
+| 类型 | 中文说明 |
+|------|----------|
+| `ApiResult` | 上游业务响应：`code` 状态码、`msg` 提示（兼容 `message`）、`data` 数据 |
+| `CaptchaResult` | 滑块结果：发码参数、sceneId、certifyId、securityToken |
+| `ReplaceMobileRequest` | 换绑入参：卡号、手机号、证件号、短信码、可选 accessToken |
+| `SmsPathType` | 发码场景：`RESET_PHONE(11)` 重置；`LOGIN(5)` 登录页 |
+| `SmsBatchReport` | 批量汇总：结果列表、成功/失败数、总耗时 |
+| `SmsTaskResult` | 批量中单号结果：是否成功、业务结果、错误信息、耗时 |
+| `YcException` | 基础设施异常；`getStep()` 标明失败阶段 |
+| `YcStep` | 阶段枚举：检查手机号 / 滑块 / 短信 / 换绑 / 登录 / HTTP / 加密 / 签名 |
+| `TransportType` | HTTP 实现：`OKHTTP`（默认）· `CURL4J` |
+| `YcClientConfig` | 客户端全部运行时配置 |
+| `YcClientBuilder` | 组装 config / 自定义 transport / captchaProvider |
 
 **错误约定**
 
-- 上游业务拒绝（HTTP 成功、JSON `code != 200`）→ 返回 `ApiResult`，**不抛**
-- 加密 / 传输 / 解析 / captcha 基础设施失败 → `YcException(step, message[, cause])`
+- 上游业务拒绝（HTTP 成功、JSON `code != 200`）→ 返回 `ApiResult`，**不抛异常**
+- 加密 / 传输 / 解析 / 滑块等基础设施失败 → 抛 `YcException(step, message[, cause])`
 
 ---
 
 ## `YcClient` 接口详解
 
-构造：
+### 构造
 
 ```java
 try (YcClient client = YcClient.builder()
         .config(YcClientConfig.builder()
-                .reconDir("/path/to/recon")   // captcha 必填
+                .reconDir("/path/to/recon")   // 过滑块必填
                 .build())
         .build()) {
     // ...
 }
 ```
 
-可选注入：`.transport(HttpTransport)` · `.captchaProvider(CaptchaProvider)`（注入后 close 时不关外部实例）。
+可选注入：`.transport(HttpTransport)` · `.captchaProvider(CaptchaProvider)`  
+（注入外部实现时，`close()` **不会**关闭它们。）
 
-### 1. `checkMobileAvailable(String mobile)`
+---
 
-| | |
-|---|---|
-| Method / Path | `GET /mobile/loginregister/checkMemberMobileAvailable?mobile=&rnd=` |
-| Body | 无 |
-| Headers | channel / client / GW 签名 / UA / Origin / Referer |
-| 返回 | `ApiResult` |
+### 1. `checkMobileAvailable(String mobile)` — 检查手机号
+
+**中文说明**：查询该手机号在会员体系中是否可用。重置手机号发码前会自动调用；登录页发码**不需要**。
+
+| 项 | 内容 |
+|----|------|
+| 上游 | `GET /mobile/loginregister/checkMemberMobileAvailable?mobile=&rnd=` |
+| 请求体 | 无 |
+| 请求头 | channel / client / GW 签名 / UA / Origin / Referer |
+| 返回 | `ApiResult`；`code==200` 表示可用 |
 | 失败 step | `CHECK_MOBILE` |
 
-### 2. `getCaptchaVerifyParam()`
+---
 
-| | |
-|---|---|
-| 实现 | `CaptchaProvider`（默认 `AliyunCaptchaProvider` + HtmlUnit） |
-| 返回 | `CaptchaResult` |
+### 2. `getCaptchaVerifyParam()` — 过滑块
+
+**中文说明**：在本地完成阿里云滑块，生成后续发短信必须携带的 `captchaVerifyParam`。  
+单次通常 **40–60 秒**，并行数受 `captchaConcurrency` 限制。
+
+| 项 | 内容 |
+|----|------|
+| 实现 | 默认 HtmlUnit 全 DOM（可选 Graal） |
+| 返回 | `CaptchaResult`（业务发码用 `captchaVerifyParam()`） |
 | 失败 step | `CAPTCHA` |
-| 耗时 | 通常 40–60s / 次；受 `captchaConcurrency` 槽位限制 |
 
 ```java
 CaptchaResult c = client.getCaptchaVerifyParam();
 String param = c.captchaVerifyParam();
 ```
 
-### 3. `getSmsCode(...)`
+---
 
-| | |
-|---|---|
-| Method / Path | `POST /mobile/login/getSmsCodeNewV2` |
-| Body | crytoLogin：`mobile`, `pathType`, `captchaVerifyParam`, `sceneId` |
-| 重载 | `(mobile, captcha)` → pathType=11；`(mobile, captcha, SmsPathType)` |
-| Referer | `LOGIN` → `isShow=login`；`RESET_PHONE` → config.referer |
+### 3. `getSmsCode(...)` — 只发短信
+
+**中文说明**：在**已有**滑块参数的前提下，单独请求短信验证码。  
+不负责过滑块；完整发码请用 `sendSms` / `sendLoginSms`。
+
+| 项 | 内容 |
+|----|------|
+| 上游 | `POST /mobile/login/getSmsCodeNewV2` |
+| 请求体 | crytoLogin 加密：`mobile` · `pathType` · `captchaVerifyParam` · `sceneId` |
+| 重载 | `(mobile, captcha)` → 默认 pathType=11；三参数可指定 `SmsPathType` |
+| Referer | 登录场景用 `isShow=login`；重置场景用配置中的 referer |
 | 返回 | `ApiResult` |
 | 失败 step | `SMS` |
 
 ```java
-// pathType=11
+// 重置手机号 pathType=11
 client.getSmsCode(mobile, captchaVerifyParam);
-// pathType=5
+// 登录页 pathType=5
 client.getSmsCode(mobile, captchaVerifyParam, SmsPathType.LOGIN);
 ```
 
-### 4. `sendSms(String mobile)` — 重置手机号发码
+| `SmsPathType` | 值 | 中文含义 |
+|---------------|----|----------|
+| `RESET_PHONE` | 11 | 重置手机号 / 会员卡相关发码 |
+| `LOGIN` | 5 | 登录页发码 |
 
-流程：`checkMobileAvailable` → 若 `code!=200` **直接返回**（不过 captcha）→ `getCaptchaVerifyParam` → `getSmsCode(..., RESET_PHONE)`。
+---
 
-### 5. `sendLoginSms(String mobile)` — 登录页发码
+### 4. `sendSms(String mobile)` — 重置手机号一键发码
 
-流程：`getCaptchaVerifyParam` → `getSmsCode(..., LOGIN)`。  
-**不**调用 `checkMemberMobileAvailable`（对齐前端 `isShow=login`）。
+**中文说明**：重置手机号场景的**完整发码链路**：先检查手机号 → 过滑块 → 发短信（pathType=11）。  
+若检查结果 `code != 200`，**直接返回检查结果**，不再过滑块、不发短信。
+
+```
+checkMobileAvailable → (code!=200 则返回) → getCaptchaVerifyParam → getSmsCode(pathType=11)
+```
+
+---
+
+### 5. `sendLoginSms(String mobile)` — 登录页一键发码
+
+**中文说明**：登录页场景的**完整发码链路**：过滑块 → 发短信（pathType=5）。  
+对齐前端 `isShow=login`，**不**调用检查手机号。  
+用户收到短信后，用 `loginBySms` 提交验证码登录。
+
+```
+getCaptchaVerifyParam → getSmsCode(pathType=5)
+```
+
+---
 
 ### 6. `loginBySms(String mobile, String smsCode)` — 提交登录验证码
 
-| | |
-|---|---|
-| Method / Path | `POST /login`（相对 baseUrl，默认 `https://uc.perfect99.com/api/login`） |
-| Body | crytoLogin：`username=mobile`, `password=smsCode`, `auth_type=sms`, `grant_type=password` |
-| Authorization | raw Basic `portal_app:perfect_portal`（**无** Bearer） |
-| GW | path=`/login`；签名 accessToken = 完整 Basic 串（对齐前端 `ce()`） |
+**中文说明**：把登录页收到的 6 位短信码提交给门户，完成**短信登录**。  
+验证码必须由外部短信通道提供（SDK 无法代收短信）。成功时 `data` 里常有 `access_token` 等字段；**SDK 不写 cookie、不缓存 token**。
+
+| 项 | 内容 |
+|----|------|
+| 上游 | `POST /login`（默认完整 URL：`https://uc.perfect99.com/api/login`） |
+| 明文业务字段 | `username=手机号` · `password=短信码` · `auth_type=sms` · `grant_type=password`（**无 cardNo**） |
+| 请求体 | 上述字段经 crytoLogin 加密为 `key` + `data` 表单 |
+| Authorization | 门户 raw Basic（`portal_app:perfect_portal`），**不加** Bearer |
+| GW 签名 | path=`/login`；accessToken 使用完整 Basic 串（对齐前端） |
 | Referer | `.../loginAndRegistration?isShow=login` |
-| 返回 | `ApiResult`；成功时 `data` 常含 `access_token` 等；**SDK 不落 cookie** |
+| 返回 | `ApiResult` |
 | 失败 step | `LOGIN` |
-| 不支持 | `cardNo`、其他 `auth_type` |
+| 不支持 | 会员卡密码登录、bindingmobile、cardNo 等其他 auth_type |
 
 ```java
 ApiResult sms = client.sendLoginSms(mobile);
 // ... 从短信通道拿到 6 位码 ...
 ApiResult login = client.loginBySms(mobile, smsCode);
 if (login.getCode() != null && login.getCode() == 200) {
-    // login.getData() 含 token 字段
+    // login.getData() 含 token 等字段
 }
 ```
 
+---
+
 ### 7. `replaceMobile(ReplaceMobileRequest req)` — 换绑手机号
 
-| | |
-|---|---|
-| Method / Path | `POST /mobile/openApi/replaceMobile` |
-| Body | crytoLogin：`cardNo`, `mobile`, `certificatesNo`, `verificationCode` |
-| Authorization | 若 `accessToken` 非空 → `Bearer {token}`，并参与 GW 签名 |
+**中文说明**：用会员卡号 + 证件号 + 短信验证码，把账号绑定到新手机号。  
+短信码需业务侧自行发码/收码后填入；若已登录可带 `accessToken`。
+
+| 项 | 内容 |
+|----|------|
+| 上游 | `POST /mobile/openApi/replaceMobile` |
+| 请求体 | crytoLogin：`cardNo` · `mobile` · `certificatesNo` · `verificationCode` |
+| Authorization | `accessToken` 非空时：`Bearer {token}`，并参与 GW 签名 |
 | 返回 | `ApiResult` |
 | 失败 step | `REPLACE` |
+
+| `ReplaceMobileRequest` 字段 | 中文含义 |
+|-----------------------------|----------|
+| `cardNo` | 会员卡号 |
+| `mobile` | 新手机号 |
+| `certNo` | 证件号（上游名 certificatesNo） |
+| `smsCode` | 短信验证码（上游名 verificationCode） |
+| `accessToken` | 可选登录 token |
 
 ```java
 var r = client.replaceMobile(new ReplaceMobileRequest(
@@ -181,20 +238,22 @@ var r = client.replaceMobile(new ReplaceMobileRequest(
 
 ---
 
-## `YcSmsBatchExecutor`
+## `YcSmsBatchExecutor` — 批量发码
 
-在**共享** `YcClient` 上并行发码。并发受 `workers` 与 `captchaConcurrency` 双重限制。
+**中文说明**：把多个手机号丢进线程池，每个号走单发完整链路。  
+并发同时受 `workers`（本类）和 `captchaConcurrency`（滑块）限制。  
+只负责**发码**，不负责 `loginBySms`。
 
 ```java
 try (YcSmsBatchExecutor batch = YcSmsBatchExecutor.builder()
         .client(client)
         .workers(50)
-        .maxBatchSize(500)          // 超限 → YcException(SMS) 且不做任何 captcha/HTTP
+        .maxBatchSize(500)          // 超限 → YcException(SMS)，且不做任何 captcha/HTTP
         // .executor(myPool)        // 可选：注入外部线程池（close 时不关）
         .build()) {
 
-    SmsBatchReport reset = batch.sendSms(mobiles);       // pathType=11
-    SmsBatchReport login = batch.sendLoginSms(mobiles);  // pathType=5
+    SmsBatchReport reset = batch.sendSms(mobiles);       // 重置 pathType=11
+    SmsBatchReport login = batch.sendLoginSms(mobiles);  // 登录 pathType=5
 
     System.out.println(reset.successCount() + "/" + reset.total()
             + " ok in " + reset.elapsedMs() + "ms");
@@ -203,18 +262,20 @@ try (YcSmsBatchExecutor batch = YcSmsBatchExecutor.builder()
 }
 ```
 
-| `SmsBatchReport` | |
-|------------------|--|
-| `results()` | 与输入顺序一致的 `List<SmsTaskResult>` |
-| `total()` / `successCount()` / `failureCount()` | 计数 |
-| `elapsedMs()` | 整批耗时 |
-| `failures()` | 失败子集 |
+| `SmsBatchReport` 方法 | 中文说明 |
+|-----------------------|----------|
+| `results()` | 与输入非空号码**同序**的单号结果列表 |
+| `total()` | 处理的号码总数 |
+| `successCount()` | 成功数 |
+| `failureCount()` | 失败数 |
+| `elapsedMs()` | 整批耗时（毫秒） |
+| `failures()` | 仅失败项 |
 
-| `SmsTaskResult` | |
-|-----------------|--|
-| `mobile()` | 号码 |
-| `success()` | 是否未抛异常且拿到 `ApiResult` |
-| `apiResult()` | 业务结果（失败时可能为 null） |
+| `SmsTaskResult` 方法 | 中文说明 |
+|----------------------|----------|
+| `mobile()` | 手机号 |
+| `success()` | 是否业务成功（拿到 `ApiResult` 且 `code==200`） |
+| `apiResult()` | 业务结果；异常失败时可能为 null |
 | `error()` | 异常信息 |
 | `elapsedMs()` | 单号耗时 |
 
@@ -222,15 +283,15 @@ try (YcSmsBatchExecutor batch = YcSmsBatchExecutor.builder()
 
 ## 业务场景对照
 
-| 场景 | 推荐调用链 |
-|------|------------|
-| 重置手机号发短信 | `sendSms(mobile)` 或 `batch.sendSms(...)` |
-| 登录页发短信 | `sendLoginSms(mobile)` 或 `batch.sendLoginSms(...)` |
-| 登录页提交验证码 | `loginBySms(mobile, smsCode)`（码来自外部短信通道） |
-| 换绑手机号 | 先自行发码/收码 → `replaceMobile(...)` |
-| 自组发码（已有 captcha） | `getSmsCode(mobile, param, pathType)` |
-| 仅检查手机号 | `checkMobileAvailable(mobile)` |
-| 仅过滑块 | `getCaptchaVerifyParam()` |
+| 业务场景 | 中文说明 | 推荐调用 |
+|----------|----------|----------|
+| 重置手机号发短信 | 改绑前验证新号，需先检查手机号 | `sendSms(mobile)` 或 `batch.sendSms(...)` |
+| 登录页发短信 | 快捷登录/非会员登录发码 | `sendLoginSms(mobile)` 或 `batch.sendLoginSms(...)` |
+| 登录页提交验证码 | 用户输入短信码完成登录 | `loginBySms(mobile, smsCode)` |
+| 换绑手机号 | 卡号+证件+短信码换绑 | 自行收码后 `replaceMobile(...)` |
+| 自组发码 | 已有 captcha，只想发短信 | `getSmsCode(mobile, param, pathType)` |
+| 仅检查手机号 | 不做滑块、不发短信 | `checkMobileAvailable(mobile)` |
+| 仅过滑块 | 调试/复用 captcha 参数 | `getCaptchaVerifyParam()` |
 
 ---
 

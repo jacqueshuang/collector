@@ -22,6 +22,12 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * Perfect99 业务客户端：检查手机号、过滑块、发短信、短信登录、换绑手机号。
+ * <p>
+ * 通过 {@link #builder()} 构造；需配置 {@code reconDir} 才能过阿里云滑块。
+ * 业务拒绝返回 {@link ApiResult}；基础设施失败抛 {@link YcException}。
+ */
 public final class YcClient implements AutoCloseable {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -31,10 +37,10 @@ public final class YcClient implements AutoCloseable {
     private static final String PATH_GET_SMS = "/mobile/login/getSmsCodeNewV2";
     private static final String PATH_REPLACE_MOBILE = "/mobile/openApi/replaceMobile";
     private static final String PATH_LOGIN = "/login";
-    /** Frontend OAuth client Basic for portal login (portal_app:perfect_portal). */
+    /** 门户登录 Basic（portal_app:perfect_portal）。 */
     private static final String PORTAL_BASIC_AUTH =
             "Basic cG9ydGFsX2FwcDpwZXJmZWN0X3BvcnRhbA==";
-    /** Referer used by login-page SMS (isShow=login). */
+    /** 登录页短信 / 登录提交使用的 Referer（isShow=login）。 */
     private static final String LOGIN_REFERER =
             "https://uc.perfect99.com/loginAndRegistration?isShow=login";
 
@@ -58,10 +64,21 @@ public final class YcClient implements AutoCloseable {
         this.ownCaptcha = ownCaptcha;
     }
 
+    /** 创建客户端构建器。 */
     public static YcClientBuilder builder() {
         return new YcClientBuilder();
     }
 
+    /**
+     * 检查会员手机号是否可用。
+     * <p>
+     * 上游：{@code GET /mobile/loginregister/checkMemberMobileAvailable}。
+     * 用于重置手机号流程；登录页发码不需要调用本接口。
+     *
+     * @param mobile 手机号
+     * @return 业务结果；{@code code==200} 表示可用
+     * @throws YcException 网络/解析失败时 step={@link YcStep#CHECK_MOBILE}
+     */
     public ApiResult checkMobileAvailable(String mobile) {
         ensureOpen();
         Objects.requireNonNull(mobile, "mobile");
@@ -78,6 +95,14 @@ public final class YcClient implements AutoCloseable {
         }
     }
 
+    /**
+     * 完成阿里云滑块，生成发短信所需的 {@code captchaVerifyParam}。
+     * <p>
+     * 默认 HtmlUnit 全 DOM，单次约 40–60 秒；受 {@code captchaConcurrency} 槽位限制。
+     *
+     * @return 滑块结果，业务发码取 {@link CaptchaResult#captchaVerifyParam()}
+     * @throws YcException 滑块失败时 step={@link YcStep#CAPTCHA}
+     */
     public CaptchaResult getCaptchaVerifyParam() {
         ensureOpen();
         try {
@@ -90,16 +115,30 @@ public final class YcClient implements AutoCloseable {
     }
 
     /**
-     * Request SMS with reset-phone pathType (11). Prefer {@link #getSmsCode(String, String, SmsPathType)}.
+     * 请求短信验证码（重置手机号场景，pathType=11）。
+     * <p>
+     * 需调用方自行提供已通过的 {@code captchaVerifyParam}。完整流程请用 {@link #sendSms(String)}。
+     *
+     * @param mobile              手机号
+     * @param captchaVerifyParam  滑块参数
+     * @return 业务结果
+     * @see #getSmsCode(String, String, SmsPathType)
      */
     public ApiResult getSmsCode(String mobile, String captchaVerifyParam) {
         return getSmsCode(mobile, captchaVerifyParam, SmsPathType.RESET_PHONE);
     }
 
     /**
-     * POST {@code /mobile/login/getSmsCodeNewV2} with crytoLogin body.
+     * 请求短信验证码（可指定场景）。
+     * <p>
+     * 上游：{@code POST /mobile/login/getSmsCodeNewV2}，body 为 crytoLogin 加密表单。
      *
-     * @param pathType {@link SmsPathType#RESET_PHONE} (11) or {@link SmsPathType#LOGIN} (5)
+     * @param mobile              手机号
+     * @param captchaVerifyParam  滑块参数
+     * @param pathType            {@link SmsPathType#RESET_PHONE}(11) 重置手机号；
+     *                            {@link SmsPathType#LOGIN}(5) 登录页
+     * @return 业务结果
+     * @throws YcException 网络/加密/解析失败时 step={@link YcStep#SMS}
      */
     public ApiResult getSmsCode(String mobile, String captchaVerifyParam, SmsPathType pathType) {
         ensureOpen();
@@ -131,8 +170,12 @@ public final class YcClient implements AutoCloseable {
     }
 
     /**
-     * Reset-phone SMS full flow: check mobile → captcha → getSmsCode(pathType=11).
-     * If check returns {@code code != 200}, returns that result without captcha/sms.
+     * 重置手机号完整发码：检查手机号 → 过滑块 → 发短信（pathType=11）。
+     * <p>
+     * 若检查手机号 {@code code != 200}，直接返回检查结果，不再过滑块/发码。
+     *
+     * @param mobile 手机号
+     * @return 业务结果
      */
     public ApiResult sendSms(String mobile) {
         ensureOpen();
@@ -145,8 +188,13 @@ public final class YcClient implements AutoCloseable {
     }
 
     /**
-     * Login-page SMS full flow ({@code isShow=login}): captcha → getSmsCode(pathType=5).
-     * No checkMemberMobileAvailable (frontend login does not call it before SMS).
+     * 登录页完整发码：过滑块 → 发短信（pathType=5）。
+     * <p>
+     * 对齐前端 {@code isShow=login}，不调用检查手机号接口。
+     * 收码后用 {@link #loginBySms(String, String)} 提交验证码登录。
+     *
+     * @param mobile 手机号
+     * @return 业务结果
      */
     public ApiResult sendLoginSms(String mobile) {
         ensureOpen();
@@ -156,10 +204,19 @@ public final class YcClient implements AutoCloseable {
     }
 
     /**
-     * Login-page SMS submit: POST {@code /login} with crytoLogin body.
-     * Payload: username=mobile, password=smsCode, auth_type=sms, grant_type=password.
-     * Authorization is raw Basic (no Bearer). GW sign uses the Basic value as accessToken
-     * (frontend {@code ce()} treats Authorization length &gt; 7 the same way).
+     * 登录页提交短信验证码（短信登录）。
+     * <p>
+     * 上游：{@code POST /login}。明文 payload 为
+     * {@code username=手机号, password=短信码, auth_type=sms, grant_type=password}（无 cardNo），
+     * 经 crytoLogin 加密后提交。Authorization 为门户 raw Basic（非 Bearer）；
+     * GW 签名将 Basic 整串作为 accessToken（对齐前端 ce()）。
+     * <p>
+     * 成功时 {@code data} 通常含 {@code access_token} 等字段；SDK 不写 cookie、不缓存 token。
+     *
+     * @param mobile  手机号（与发码号码一致）
+     * @param smsCode 短信验证码
+     * @return 业务结果
+     * @throws YcException 网络/加密/解析失败时 step={@link YcStep#LOGIN}
      */
     public ApiResult loginBySms(String mobile, String smsCode) {
         ensureOpen();
@@ -202,6 +259,16 @@ public final class YcClient implements AutoCloseable {
         }
     }
 
+    /**
+     * 换绑手机号（会员卡 + 证件 + 短信验证码）。
+     * <p>
+     * 上游：{@code POST /mobile/openApi/replaceMobile}。
+     * 若 {@link ReplaceMobileRequest#accessToken()} 非空，请求带 {@code Authorization: Bearer ...}。
+     *
+     * @param req 换绑参数
+     * @return 业务结果
+     * @throws YcException 网络/加密/解析失败时 step={@link YcStep#REPLACE}
+     */
     public ApiResult replaceMobile(ReplaceMobileRequest req) {
         ensureOpen();
         Objects.requireNonNull(req, "req");
@@ -232,6 +299,11 @@ public final class YcClient implements AutoCloseable {
         }
     }
 
+    /**
+     * 关闭客户端自建的 captcha / HTTP 资源。
+     * <p>
+     * 若通过 builder 注入了外部 transport 或 captchaProvider，则不会关闭它们。
+     */
     @Override
     public void close() {
         if (!closed.compareAndSet(false, true)) {
