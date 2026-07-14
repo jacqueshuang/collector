@@ -8,6 +8,7 @@ import com.j.soul.yc.http.HttpResponse;
 import com.j.soul.yc.http.HttpTransport;
 import com.j.soul.yc.model.ApiResult;
 import com.j.soul.yc.model.ReplaceMobileRequest;
+import com.j.soul.yc.sign.GwSigner;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -19,6 +20,7 @@ import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -215,15 +217,25 @@ class YcClientTest {
         HttpRequest post = transport.requests.getFirst();
         assertEquals("POST", post.method());
         assertTrue(post.url().endsWith("/login"), post.url());
-        assertEquals(
-                "Basic cG9ydGFsX2FwcDpwZXJmZWN0X3BvcnRhbA==",
-                post.headers().get("Authorization"));
-        assertFalse(post.headers().get("Authorization").startsWith("Bearer"));
+        String basic = "Basic cG9ydGFsX2FwcDpwZXJmZWN0X3BvcnRhbA==";
+        assertEquals(basic, post.headers().get("Authorization"));
         assertTrue(post.headers().get("Referer").contains("isShow=login"));
         assertHasBusinessHeaders(post.headers());
         assertNotNull(post.headers().get("GW-Timestamp"));
         assertNotNull(post.headers().get("GW-Nonce"));
         assertNotNull(post.headers().get("GW-Client"));
+
+        // GW signature must embed Basic as accessToken (frontend ce() contract).
+        YcClientConfig defaults = YcClientConfig.builder().build();
+        long ts = Long.parseLong(post.headers().get("GW-Timestamp"));
+        String nonce = post.headers().get("GW-Nonce");
+        Map<String, String> expected = GwSigner.sign(
+                "/login", "POST", defaults.gwKey(), defaults.gwClient(), basic, ts, nonce);
+        assertEquals(expected.get("GW-Signature"), post.headers().get("GW-Signature"));
+        Map<String, String> withoutToken = GwSigner.sign(
+                "/login", "POST", defaults.gwKey(), defaults.gwClient(), null, ts, nonce);
+        assertNotEquals(withoutToken.get("GW-Signature"), post.headers().get("GW-Signature"));
+
         assertTrue(post.headers().get("Content-Type").startsWith("application/x-www-form-urlencoded"));
         String body = new String(post.body(), StandardCharsets.UTF_8);
         assertTrue(body.contains("key="));

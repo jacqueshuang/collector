@@ -272,7 +272,7 @@ try (YcClient client = YcClient.builder()
 }
 ```
 
-Public API: `checkMobileAvailable` · `getCaptchaVerifyParam` · `getSmsCode` · `sendSms`（重置 pathType=11） · `sendLoginSms`（登录 pathType=5） · `replaceMobile` · 批量 `YcSmsBatchExecutor#sendSms` / `#sendLoginSms`.
+Public API: `checkMobileAvailable` · `getCaptchaVerifyParam` · `getSmsCode` · `sendSms`（重置 pathType=11） · `sendLoginSms`（登录 pathType=5） · `loginBySms` · `replaceMobile` · 批量 `YcSmsBatchExecutor#sendSms` / `#sendLoginSms`.
 
 ## Config (`YcClientConfig`)
 
@@ -428,6 +428,8 @@ java --enable-native-access=ALL-UNNAMED -jar app.jar
 | `YC_LIVE_CAPTCHA=1` | tests only | enables live Init/Verify / network captcha tests |
 | `YC_LIVE_SMS=1` | tests only | live reset-phone `sendSms` (pathType=11); needs `YC_TEST_MOBILE` |
 | `YC_LIVE_LOGIN_SMS=1` | tests only | live login `sendLoginSms` (pathType=5); needs `YC_TEST_MOBILE` |
+| `YC_LIVE_LOGIN=1` | tests only | live `loginBySms`; needs `YC_TEST_MOBILE` + `YC_SMS_CODE` |
+| `YC_SMS_CODE` | tests only | SMS code for live `loginBySms` |
 | `YC_TEST_MOBILE` | tests only | mobile for live SMS ITs |
 | `ALIYUN_CAPTCHA_KEY_ID` | **not used** | early plan only; not read by current SDK |
 | `ALIYUN_CAPTCHA_KEY_SECRET` | **not used** | early plan only; not read by current SDK |
